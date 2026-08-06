@@ -6,6 +6,6 @@
     "exactOptionalPropertyTypes": true, "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": [".", "../shared/types.ts"],
+  "include": ["src", "tests"],
   "exclude": ["src/web"]
 }
