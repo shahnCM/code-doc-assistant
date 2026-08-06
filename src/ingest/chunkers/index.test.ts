@@ -20,8 +20,10 @@ function makeChunker(name: string, chunkerKind: string, supports: (c: Candidate)
 }
 
 describe('chunker registry', () => {
-  it('starts as an empty, total-by-construction skeleton', () => {
-    expect(registry).toEqual([]);
+  it('registers the ts-morph chunker for all eight TS/JS extensions', () => {
+    for (const extension of TS_JS_EXTENSIONS) {
+      expect(selectChunker(candidate(extension, 'typescript'), registry)?.name).toBe('ts-morph');
+    }
   });
 
   const tsLikeChunker = makeChunker('ts-like', 'ts-morph', (c) => TS_JS_EXTENSIONS.includes(c.extension));
