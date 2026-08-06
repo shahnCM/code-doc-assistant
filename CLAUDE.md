@@ -1,7 +1,9 @@
 # Code Documentation Assistant
 
-RAG over TypeScript codebases. AST-level chunking via ts-morph, hybrid dense + lexical
-retrieval in Postgres, answers cited back to `file:line`.
+RAG over source repositories, indexed from a local path or a public GitHub URL.
+TypeScript/JavaScript gets AST-level chunking via ts-morph; every other language gets a generic
+structural chunker. Hybrid dense + lexical retrieval in Postgres, answers cited back to
+`file:line`.
 
 > **Protected files — never edit these without being asked explicitly:** `CLAUDE.md`,
 > `README.md`, `BUILD-PLAN.md`, `.env`, `.mcp.json`, anything under `.claude/`. Their contents
@@ -13,7 +15,7 @@ retrieval in Postgres, answers cited back to `file:line`.
 
 TypeScript (strict, ESM) · Node 24.18.0 · Express 5 · React + Vite + Tailwind ·
 Postgres 16 + pgvector 0.8.6 · Gemini (`gemini-embedding-2` 768d, `gemini-3.6-flash`) ·
-vitest · pino
+ts-morph · vitest · pino
 
 ## Commands
 
@@ -22,6 +24,7 @@ npm test              vitest run          (never bare `vitest` — watch mode ha
 npm run typecheck     tsc --noEmit for both server and client configs
 npm run lint          eslint
 npm run ingest        index a repo:  -- --repo ./tmp/hono
+                                     -- --repo https://github.com/honojs/hono
 npm run eval          retrieval eval against evals/golden.json
 npm run migrate       node-pg-migrate up
 ```
@@ -55,9 +58,12 @@ project at `/projects/code-doc-assistant`). This is settled — do not offer hos
 ## Architecture
 
 ```
-src/ingest/     walk files → ts-morph parse → declaration chunks → enrichment headers
+src/ingest/     acquire (local path | git clone) → walk → language router
+                  ├ .ts/.tsx/.js/.jsx/.mts/.cts → ts-morph → declaration chunks
+                  └ everything else             → generic structural chunker
+                → enrichment headers (identical shape from both paths)
 src/index/      embed (cached by contentHash) → pgvector + tsvector
-src/retrieve/   dense + lexical → RRF fusion → call-graph expansion
+src/retrieve/   dense + lexical → RRF fusion → call-graph expansion (TS/JS only)
 src/generate/   context assembly → LLM → citation parsing/validation
 src/server/     express routes, SSE streaming
 src/web/        react client (own tsconfig — browser lib, bundler resolution)
@@ -79,6 +85,9 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 - `src/shared/` compiles under both tsconfigs, so it holds **types only** — no runtime code at
   all. No `process`, no `document`, no `fs`, no imports of anything Node- or browser-specific.
   Runtime helpers that need env or a logger go in `src/config.ts` / `src/logger.ts`.
+- Both chunkers emit the same `Chunk` shape. The generic path sets `kind: 'block'` and leaves
+  `signature`/`jsDoc` null rather than inventing them. Nothing downstream branches on which
+  chunker produced a chunk — that fact lives only in `chunkerKind`, for the trace panel.
 - No `any`. No non-null assertions. Discriminated unions over optional-field soup.
 - `noUncheckedIndexedAccess` is on. Array access returns `T | undefined`; handle it.
 - All shared shapes live in `src/shared/types.ts`. Never redeclare a shape locally, and never
@@ -90,6 +99,16 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 
 ## Gotchas
 
+- Language routing is by file extension only. No content sniffing, no shebang parsing —
+  extension is right often enough and wrong cheaply.
+- Repo acquisition: `git clone --depth 1` into `./tmp/`, public HTTPS URLs only. No auth, no
+  SSH. Private repos are what the local-path mode is for — say that in the README rather than
+  half-implementing token support.
+- Call-graph expansion (`symbol_edges`) is TS/JS only. Generic-chunked repos get retrieval
+  without expansion, not a broken expansion.
+- The generic chunker must never fabricate a `signature` or `jsDoc`. A best-effort
+  `symbolName` from a definition-looking first line is fine; anything more is a lie the
+  citation validator can't catch.
 - Express 5: async handlers forward rejections natively. Do NOT write try/catch + `next(err)`.
 - Express 5 dropped regex sub-expressions in paths — `/:id(\d+)` no longer parses.
 - SSE: exclude `/api/chat` from compression middleware or the stream buffers and never flushes.
@@ -109,7 +128,7 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 - Never `res.json()` a large payload — `JSON.stringify` is synchronous and blocks the loop.
   Trace data goes down the SSE stream.
 - ts-morph parsing is synchronous CPU work. It belongs in the ingest CLI, never in a request
-  handler.
+  handler. The generic chunker is cheaper but still synchronous — same rule.
 - Vite dev server needs `--host 0.0.0.0` (or `server.host: true`). Express defaults are fine.
 - pgvector cosine is `<=>`. `<->` is L2 and will silently return worse results.
 - ts-morph: use `getStructure()` for signatures, not `getText()` — the latter drags in trivia.
@@ -127,7 +146,8 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
   normalization step. `gemini-embedding-001` would need one — another reason not to swap the
   model id without re-checking.
 - Embedding calls burn free-tier request budget. Always check the contentHash cache first.
-- The demo corpus lives in `./tmp/` and is gitignored. Never index `node_modules`.
+- The demo corpora live in `./tmp/` and are gitignored. Never index `node_modules`, `.git`,
+  lockfiles, binaries, or files over 1MB.
 - Never `docker compose down -v` — that deletes `volumes/vol-postgres-16`.
 
 ## Rules
@@ -137,6 +157,7 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
   unprompted.
 - Stop when `npm test` and `npm run typecheck` are both clean.
 - Do not add a dependency without asking first. This has already been used to decline tRPC
-  and Next.js — the bar is real.
+  and Next.js — the bar is real. `ts-morph` is installed; a per-language tree-sitter grammar
+  is not, and adding one is a conversation, not a slice.
 - Do not touch `README.md` — I write that myself. Same for the other protected files listed at
   the top. The hook will stop you; treat that as the answer, not an obstacle to route around.

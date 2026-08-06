@@ -8,6 +8,26 @@ implementation tasks, and a `Stop` hook refuses to let a block close red.
 
 ---
 
+## Scope — what this indexes
+
+The application is written in TypeScript. That is independent of what it can *read*.
+
+- **TypeScript / JavaScript** (`.ts .tsx .js .jsx .mts .cts`) → ts-morph, declaration-level
+  chunks with signatures, jsDoc and call-graph edges. This is the deep path.
+- **Everything else** → a generic structural chunker: brace/indent-aware block splitting with
+  the same enrichment header and the same `Chunk` shape, minus the fields we can't honestly
+  fill.
+
+The honest claim, and the one the README makes: *optimised for TypeScript/JavaScript, other
+languages supported via generic structural chunking.* That is a stronger product than either
+"TypeScript only" or a half-built five-grammar tree-sitter matrix at hour 14.
+
+**Sources:** `--repo` takes a local path **or** a public GitHub HTTPS URL (`git clone --depth 1`
+into `./tmp/`). Local paths cover private repos without building auth; public URLs mean a
+grader can point it at anything. No SSH, no tokens — named as a limitation, not hidden.
+
+---
+
 ## Verified environment
 
 Confirmed by running the commands, not by reading the repo. These are facts.
@@ -25,6 +45,7 @@ Confirmed by running the commands, not by reading the repo. These are facts.
 | Node | **24.18.0**, pinned in `.mise.toml` |
 | Embedding model | **gemini-embedding-2** — 768 dims, auto-normalized, needs Content-wrapping |
 | Generation model | **gemini-3.6-flash** — streams via `generateContentStream` |
+| Parser | **ts-morph** — installed, TS/JS path only |
 
 **Port picks** (all inside published ranges, so they reach `localhost` either way):
 API `8080` · Vite dev `5173`
@@ -66,6 +87,7 @@ matter every hour of this build:
 
 - [x] Gemini key in `.env`; models verified by smoke test (`gemini-embedding-2`, `gemini-3.6-flash`)
 - [x] `@google/genai` installed; embedding contract confirmed (Content-wrapping, 768d, order)
+- [x] `ts-morph` installed
 
 Remaining: `protect.sh` + hook registration, one live hook test from the panel. Then Block 1.
 
@@ -77,9 +99,10 @@ Framework choice is close to irrelevant here: each request costs one embedding c
 Postgres query, and an LLM stream running for seconds. That dominates everything. What
 actually matters, in order:
 
-1. **Event-loop blocking.** ts-morph parsing is synchronous CPU work. Ingest stays a separate
-   CLI process precisely so one indexing run can't freeze every SSE stream in flight. If you
-   ever expose indexing as an endpoint, it goes in a `worker_thread` or a queue — never inline.
+1. **Event-loop blocking.** ts-morph parsing is synchronous CPU work; so, more cheaply, is the
+   generic chunker. Ingest stays a separate CLI process precisely so one indexing run can't
+   freeze every SSE stream in flight. If you ever expose indexing as an endpoint, it goes in a
+   `worker_thread` or a queue — never inline.
 2. **Bounded upstream concurrency.** Semaphore at 5 for embeddings. Unbounded `Promise.all`
    turns a rate limit into a cascade of retries.
 3. **Postgres pool sizing.** `pg` Pool max 10–20 per instance. HNSW search is CPU-bound inside
@@ -97,7 +120,19 @@ actually breaks, which is worth more than a framework benchmark.
 
 Terse notes. Rewrite these in your own words; do not paste them.
 
-- **Express 5, not Next.js.** Ingest is CPU-bound ts-morph work that must be a separate process
+- **Two chunkers, not one, and not five.** The implementation language (TypeScript) and the
+  languages the tool can *index* are independent concerns; coupling them would have been an
+  accident, not a decision. ts-morph gives real declaration boundaries, signatures, jsDoc and
+  call-graph edges for TS/JS — that depth is the differentiator and it stays. A per-language
+  tree-sitter matrix would have bought breadth at the cost of five grammars, five node-type
+  maps and five sets of edge cases inside an 18-hour budget. The generic structural chunker
+  already existed as the parse-failure fallback; promoting it to a first-class route cost an
+  extension check and bought every other language at once. Named as a deliberate tier, with
+  tree-sitter as the obvious next increment.
+- **Extension-based routing, no content sniffing.** Extensions are wrong occasionally and
+  cheaply; sniffing is a subsystem. The fallback is already safe, so a misroute degrades to
+  generic chunking rather than failing.
+- **Express 5, not Next.js.** Ingest is CPU-bound parsing work that must be a separate process
   regardless, so a fullstack framework covers half the system while inserting a layer between
   you and the SSE socket. Cancellation semantics are the interesting part of this app.
 - **One package, two entry points, not FE/BE split repos.** Shared event and citation shapes
@@ -159,7 +194,7 @@ The highest-leverage 75 minutes of the day. You're building the machine that bui
 
 ```bash
 cd /projects/code-doc-assistant
-npm i @google/genai
+npm i @google/genai ts-morph
 ```
 
 Then put a Gemini key in `.env` (free, no card — aistudio.google.com), and confirm
@@ -225,6 +260,8 @@ You are a senior TypeScript reviewer. For the current diff check:
 4. Errors — any silently swallowed catch.
 5. Imports — any relative import missing its `.js` extension; any runtime code at all in
    src/shared (types only); any src/web import of src/config.ts or src/logger.ts.
+6. Routing — any code outside src/ingest/ that branches on chunkerKind or language; any
+   generic-chunker path that fabricates a signature or jsDoc.
 Return a markdown table: File | Issue | Severity | Fix. If clean, return "APPROVED".
 ```
 
@@ -235,11 +272,13 @@ name: chunk-inspector
 description: Audits chunks.json for chunking quality. Reads the whole file, reports concisely.
 tools: [Read, Bash]
 ---
-Sample 30 chunks across different kinds. Report ONLY:
-- Chunks that split mid-declaration
+Sample 30 chunks across different kinds, languages and chunkerKinds. Report ONLY:
+- Chunks that split mid-declaration or mid-block
 - Chunks missing an enrichment header
 - Chunks under 20 tokens (probably useless) or over budget
 - Symbols present in the source but absent from chunks.json
+- Generic-chunker chunks carrying a non-null signature or jsDoc (these must be null)
+- Files routed to the wrong chunker for their extension
 Return a bullet list of concrete defects with file paths. No praise, no summary.
 ```
 
@@ -321,35 +360,57 @@ easy to hallucinate. Skip everything else — each server costs window before yo
 
 ---
 
-# BLOCK 1 — Ingestion & chunking (1:15 → 4:15)
+# BLOCK 1 — Acquisition, routing & chunking (1:15 → 4:15)
 
 The highest-scoring code in the project. Give it Opus and real planning time.
 
 ### PLAN — Plan mode · Opus · `/effort xhigh`
 
 ```
-plan: AST chunking for the ingest pipeline.
+plan: language-routed chunking for the ingest pipeline.
 
 Read @CLAUDE.md and @src/shared/types.ts first.
 
-Goal: turn a TypeScript repo into declaration-level chunks ready for embedding.
+Goal: turn any source repository — local path or public GitHub URL — into chunks ready for
+embedding. Depth for TypeScript/JavaScript, honest coverage for everything else.
 
-Constraints:
-- ts-morph only. No tree-sitter, no regex parsing.
+Acquisition:
+- --repo accepts a local path OR a public https GitHub URL.
+- URLs: git clone --depth 1 into ./tmp/<name>. Local paths used in place, never copied.
+- Record the resolved commit SHA on the ingest run — the README reports it.
+
+Routing (by file extension only, no content sniffing):
+- .ts .tsx .js .jsx .mts .cts  → ts-morph declaration chunker
+- everything else              → generic structural chunker
+- Skip binaries, lockfiles, node_modules, .git, and files over 1MB.
+
+TS/JS chunker:
+- ts-morph only. No regex parsing.
 - Chunk unit is the declaration: function, class, method, interface, type alias, enum,
   exported const.
-- Every chunk carries: filePath, symbolName, kind, signature, jsDoc, startLine, endLine,
-  parentSymbol, isExported, contentHash.
-- Declarations over the token budget split by statement block, enrichment header repeated
-  on every part, tagged partIndex/partTotal.
-- A file that fails to parse must not abort the run — fall back to a line-window chunk,
+
+Generic chunker:
+- Split on blank-line-separated top-level blocks, respecting brace/bracket depth so a block
+  is never cut mid-nesting. Indentation-aware for Python-style languages.
+- Merge blocks under the minimum size, split blocks over the token budget.
+- Best-effort symbolName from the first line when it looks like a definition; null otherwise.
+  Do NOT fabricate signatures or jsDoc.
+
+Both chunkers emit one Chunk shape: filePath, symbolName (nullable), kind, signature
+(nullable), jsDoc (nullable), startLine, endLine, parentSymbol (nullable), isExported,
+contentHash, language, chunkerKind.
+
+- Declarations/blocks over the token budget split by statement block, enrichment header
+  repeated on every part, tagged partIndex/partTotal.
+- A file that fails its chunker must not abort the run — fall back to a line-window chunk,
   count it, report at the end.
 
 Write plans/01-chunking.md with INTENT, FILES, TESTS, RISKS, TASKS.
-TESTS come before implementation tasks and must cover: an oversized function, an unparseable
-file, a method nested in a class, a barrel re-export, and a file with zero declarations.
+TESTS come before implementation tasks and must cover: an oversized TS function, an
+unparseable TS file, a method nested in a class, a barrel re-export, a file with zero
+declarations, a Python file routed to the generic chunker, and an unknown extension.
 
-DO NOT write code. DO NOT install packages.
+DO NOT write code. DO NOT install packages. ts-morph is already installed.
 STOP WHEN plans/01-chunking.md exists and you have asked me every open question.
 ```
 
@@ -357,18 +418,23 @@ Read the plan properly. If any section is vague, it isn't ready — push back be
 
 ### EXECUTE — Accept-edits · Sonnet · `/effort high`
 
-Three slices, `/compact` between them if the window fills:
+Four slices, `/compact` between them if the window fills:
 
 ```
-Execute slice 1 of @plans/01-chunking.md — file walker and ts-morph project loader only.
+Execute slice 1 of @plans/01-chunking.md — repo acquisition, file walker, language router.
 Write the plan's tests first, then the implementation.
 Hand-write fixtures in tests/fixtures/sample-repo/. Do not copy from node_modules.
 DO NOT touch src/index/ or src/retrieve/.
 STOP WHEN npm test and npm run typecheck are both clean.
 ```
 
-Then slice 2 (declaration extraction), slice 3 (enrichment headers + oversized splitting),
-committing at each. **Open the diff view at every slice boundary** — you're in VS Code, use it.
+Then slice 2 (ts-morph declaration extraction), slice 3 (generic structural chunker),
+slice 4 (enrichment headers + oversized splitting, shared by both paths), committing at each.
+**Open the diff view at every slice boundary** — you're in VS Code, use it.
+
+If you overrun, slice 3 is the one to timebox: a competent block splitter is enough, and
+"generic chunking is deliberately simple" is a defensible README sentence. Slice 2 is not
+negotiable — it's the differentiator.
 
 ### VERIFY
 
@@ -377,18 +443,24 @@ well enough to judge your answers against. Deliberately *not* zod — you're usi
 validation library, and a README that says "we index zod" while also saying "we validate with
 zod" is needlessly confusing to read.
 
+Then ingest **one small non-TS repo** (a Python one) so the generic path is exercised on
+something real, not just a fixture. Confirm chunks land with `chunkerKind: 'generic'`, sane
+block boundaries, and **null** signature/jsDoc rather than fabricated ones.
+
 ```
-Delegate to code-critic: review the diff for @plans/01-chunking.md slices 1-3.
+Delegate to code-critic: review the diff for @plans/01-chunking.md slices 1-4.
 Then run npm run ingest -- --repo ./tmp/hono and delegate to chunk-inspector for chunks.json.
-Report both tables. Do not fix anything yet — I want to read the findings first.
+Repeat the inspection for the Python corpus.
+Report all tables. Do not fix anything yet — I want to read the findings first.
 ```
 
-**Gate:** read 20 chunks yourself. The subagent catches structural defects; only you can judge
-whether a chunk *reads* like something worth embedding. This is also where you get the
-before/after material for the README's chunking section — capture a naive-splitter comparison
-while the contrast is in front of you.
+**Gate:** read 20 chunks yourself — 15 TS, 5 generic. The subagent catches structural defects;
+only you can judge whether a chunk *reads* like something worth embedding. This is also where
+you get the before/after material for the README's chunking section — capture a naive-splitter
+comparison while the contrast is in front of you, and capture one TS chunk beside one generic
+chunk of similar code, because that pair *is* the argument for the two-tier design.
 
-**Commit.** `feat(ingest): AST-level chunking with enrichment headers`
+**Commit.** `feat(ingest): language-routed chunking with AST depth for TS/JS`
 
 ---
 
@@ -418,8 +490,10 @@ Requirements:
   (measured norm 1.0000 at 768). Do not add a normalize step; it would be a no-op that implies
   a misunderstanding.
 - chunks table: embedding vector(768), tsv tsvector generated from
-  symbol_name || signature || content, content_hash unique.
-- HNSW index on embedding (vector_cosine_ops), GIN on tsv.
+  symbol_name || signature || content, content_hash unique, plus language and chunker_kind
+  columns carried through from chunking. Both nullable-safe in the tsv expression — generic
+  chunks have no signature.
+- HNSW index on embedding (vector_cosine_ops), GIN on tsv, btree on language.
 - Disk cache keyed by content_hash — re-ingest during development must not re-embed, and must
   not burn free-tier request budget.
 - Batch with concurrency 5, exponential backoff on 429. Embedding TPM headroom is large on the
@@ -427,7 +501,8 @@ Requirements:
 
 TESTS: cache hit skips the API call (mock the embedding client — never hit the real API from
 the suite, free tier or not); batching respects the concurrency cap; a failed batch retries
-without corrupting the run; migration is idempotent.
+without corrupting the run; migration is idempotent; a generic chunk with null signature
+produces a valid tsv rather than NULL.
 
 Write plans/02-embedding.md. STOP WHEN it exists.
 ```
@@ -436,7 +511,8 @@ Write plans/02-embedding.md. STOP WHEN it exists.
 
 ```
 Via the postgres MCP: confirm the chunks table has an HNSW index, report row count by kind,
-and show one row's enriched text truncated to 200 chars. Do not SELECT * anything.
+language and chunker_kind, and show one row's enriched text truncated to 200 chars.
+Do not SELECT * anything.
 ```
 
 **Commit.** `feat(index): embedding pipeline with content-hash cache`
@@ -454,15 +530,19 @@ plan: hybrid retrieval, dense + lexical, fused with RRF.
 
 Requirements:
 - Dense leg: cosine via `<=>` (NOT `<->`, that's L2), top 30.
-- Lexical leg: ts_rank over tsv, plus an exact symbol_name equality boost.
+- Lexical leg: ts_rank over tsv, plus an exact symbol_name equality boost. symbol_name is
+  nullable for generic chunks — the boost must not drop those rows from the leg.
 - Fuse with reciprocal rank fusion, k=60, in a single SQL statement.
 - Return every chunk with denseRank, lexicalRank and fusedScore — the UI trace needs all three.
+- Retrieval is language-agnostic. Do not weight or filter by language or chunker_kind; a
+  chunk is a chunk by this point.
 
 TESTS (these are the contract):
 - An exact symbol name query returns that symbol at rank 1.
 - A purely conceptual query returns results the lexical leg alone would miss.
 - RRF fusion verified against hand-computed ranks on a fixed fixture.
 - Empty result set returns [] and does not throw.
+- A corpus containing both chunker kinds returns both; neither is systematically starved.
 
 Write plans/03-retrieval.md. STOP WHEN it exists.
 ```
@@ -513,8 +593,8 @@ Requirements:
   * AbortError must be caught and classified separately from genuine errors — it is a normal
     outcome, not a 500
   * emit a trace event on cancellation with elapsed time and estimated tokens not generated
-- Trace data (chunks, scores, timings) rides the SSE stream. Never res.json() a large payload —
-  JSON.stringify is synchronous and blocks the loop.
+- Trace data (chunks, scores, timings, language, chunkerKind) rides the SSE stream. Never
+  res.json() a large payload — JSON.stringify is synchronous and blocks the loop.
 
 TESTS: refusal path fires on empty retrieval; citation parser rejects fabricated ranges;
 budget truncation never cuts a chunk mid-header; abort propagates to a mocked LLM client;
@@ -543,7 +623,8 @@ Layout: single column under md, two panes above — chat left, source viewer rig
 Citations render as chips; tapping loads that file range into the source pane, which becomes
 a slide-up drawer on mobile.
 Collapsible trace panel: retrieved chunks with dense/lexical/fused scores, tokens, per-stage
-latency.
+latency, and a small badge showing language + chunkerKind per chunk so the two-tier design is
+visible rather than claimed.
 Stop button during streaming: aborts the client fetch via AbortController, which closes the
 SSE connection and triggers server-side cancellation. On cancel, the trace shows elapsed time
 and estimated tokens not generated.
@@ -581,23 +662,27 @@ undeployable costs you far more than either stretch block.
 
 # BLOCK 6 — Call-graph expansion (12:30 → 14:00) · stretch, cut first
 
-The payoff for choosing AST over text chunking. Build edges at **ingest** time — reference
-finding needs the whole ts-morph Project in memory and is far too slow per-query.
+The payoff for choosing AST over text chunking on the TS/JS path. **TS/JS only** — ts-morph
+resolves the references, and generic-chunked repos skip expansion rather than getting a broken
+one. Build edges at **ingest** time — reference finding needs the whole ts-morph Project in
+memory and is far too slow per-query.
 
 ```
-plan: symbol_edges table and 1-hop retrieval expansion.
+plan: symbol_edges table and 1-hop retrieval expansion, TS/JS only.
 
-At ingest: for each declaration resolve call sites and referenced symbols via ts-morph, store
-edges (from_chunk_id, to_chunk_id, edge_type: calls | called_by).
+At ingest: for each TS/JS declaration resolve call sites and referenced symbols via ts-morph,
+store edges (from_chunk_id, to_chunk_id, edge_type: calls | called_by). Generic chunks
+produce no edges — this is expected, not a gap to paper over.
 At query: after fusion pull 1-hop neighbours of the top 3 hits, ranked strictly below direct
 hits, capped by remaining token budget.
 Expanded chunks flagged so the trace panel shows them distinctly.
 
 TESTS: a function calling a helper produces both edge directions; expansion respects the token
-cap; expansion never displaces a direct hit; cyclic references terminate.
+cap; expansion never displaces a direct hit; cyclic references terminate; a corpus with zero
+TS files produces zero edges and retrieval still returns results.
 ```
 
-That last test is the one people forget.
+That last-but-one test is the one people forget.
 
 ---
 
@@ -612,8 +697,10 @@ Classifier — no LLM call, pure heuristic:
 - "architecture" / "overall" / "structure" / "flow" → architectural
 Each category tunes k, dense/lexical weight, and expansion depth.
 
-evals/golden.json: 15 questions with expected source files, five per category.
-npm run eval prints hit@5, hit@10, MRR as a markdown table.
+evals/golden.json: 15 questions with expected source files, five per category, against the
+TS demo corpus. If time allows, a second 5-question set against the Python corpus — even a
+small number there is direct evidence the generic path retrieves, not just ingests.
+npm run eval prints hit@5, hit@10, MRR as a markdown table, split by corpus.
 Space generation calls in the runner — a short delay between questions, not a tight loop —
 free-tier RPM is the binding constraint here, not TPM, and 15 questions run back-to-back can
 trip it.
@@ -623,7 +710,9 @@ STOP WHEN npm run eval produces a table.
 ```
 
 Then run it twice — dense-only against hybrid — and keep both rows, spaced the same way. A
-configuration that scored *worse* is the most persuasive thing you can put in a README.
+configuration that scored *worse* is the most persuasive thing you can put in a README. If you
+got the Python set in, the TS-vs-generic gap is a second honest comparison and it costs nothing
+extra to report.
 
 ---
 
@@ -648,7 +737,7 @@ Non-negotiable, and cheap if planned as one slice.
 plan: production readiness.
 
 - Multi-stage Dockerfile from node:24.18.0-slim: build stage, slim runtime, non-root user,
-  no dev deps in the final image.
+  no dev deps in the final image. `git` must be present in the runtime image — ingest clones.
 - Shipped docker-compose.yml uses `pgvector/pgvector:0.8.6-pg16` (version-pinned, not the
   floating `pg16` tag) — NOT my dev image. Graders must not build a custom GIS image to run
   a take-home.
@@ -671,6 +760,8 @@ cd /tmp && git clone <your-repo> fresh && cd fresh
 
 Run this from the **host**, not the workstation — that is the environment a grader has, and it
 catches every place you accidentally depended on `postgres-16` being resolvable by hostname.
+Ingest a GitHub URL in this run, not a local path — that is the path a grader will actually
+take, and it exercises the clone code that never runs in your dev loop.
 
 **Version note for the README:** you developed against pgvector 0.8.6 and Node 24.18.0. Say so.
 0.8.x has HNSW, `halfvec` and iterative index scans that older builds lack, and a grader on a
@@ -699,6 +790,8 @@ actually do. No style edits, no rewrites, no suggestions.
 - [ ] Confirm every brief bullet has a section: setup, architecture, productionising,
       RAG/LLM decisions **including orchestration framework**, key technical decisions,
       engineering standards *and* the ones skipped, AI tool usage, what you'd do differently
+- [ ] State the language tiering plainly in the first paragraph — optimised for TS/JS, generic
+      structural chunking elsewhere. Claim exactly what you built, no more
 - [ ] Repo name and README title match what the thing actually is
 
 ---

@@ -17,10 +17,19 @@
 
 ## What this is
 
-> PROMPT: Two or three sentences. What does it do, what codebase did you index for the demo,
+> PROMPT: Two or three sentences. What does it do, what codebases did you index for the demo,
 > what can a reader ask it?
+>
+> State the language tiering in this first paragraph, not buried in limitations: AST-level
+> chunking for TypeScript/JavaScript, generic structural chunking for everything else. Claim
+> exactly that and no more — "chat with any codebase, optimised for TS/JS" is accurate and
+> stronger than either "TypeScript only" or an implied five-language parser matrix.
+>
+> Say both input modes here too: a local path (which is how you point it at private code) or a
+> public GitHub URL.
 
-**Demo corpus:** <repo you indexed, commit SHA, rough file/symbol counts>
+**Demo corpora:** <TS repo indexed, commit SHA, rough file/symbol counts> ·
+<non-TS repo indexed, commit SHA, counts>
 
 ---
 
@@ -33,17 +42,22 @@ cp .env.example .env      # set GEMINI_API_KEY
 npm ci
 docker compose up -d
 npm run migrate           # schema is migration-based, not created at boot
-npm run ingest -- --repo <path-or-url>
+npm run ingest -- --repo https://github.com/honojs/hono   # or a local path
 open http://localhost:8080
 ```
 
 > PROMPT: Test this on a clean machine before submitting — clone to /tmp and follow it verbatim,
-> from the host, not from your dev container. A setup section that doesn't work is worse than no
-> setup section. State required keys and roughly how long ingestion takes on the demo repo.
+> from the host, not from your dev container. Ingest via the GitHub URL in that test run, since
+> that's the path a grader takes and the one your dev loop never exercises. A setup section that
+> doesn't work is worse than no setup section. State required keys and roughly how long ingestion
+> takes on each demo repo.
 
 **Requires:** Node 24.18.0 (`.nvmrc` / `.mise.toml` pin the exact version) · Docker Compose ·
 one Gemini API key — free, no credit card, from aistudio.google.com. Covers both embedding and
 generation; no separate OpenAI/Anthropic key needed.
+
+**Repo sources:** a local directory path, or a public GitHub HTTPS URL (shallow-cloned into
+`./tmp/`). No SSH, no tokens — private repos go through the local-path mode.
 
 ---
 
@@ -52,17 +66,22 @@ generation; no separate OpenAI/Anthropic key needed.
 > PROMPT: A diagram if you have one (Mermaid is fine and renders on GitHub). Otherwise walk the
 > two paths in prose:
 >
-> - **Ingest:** clone → walk files → ts-morph parse → declaration-level chunks → enrich headers
->   → embed → store in pgvector alongside a tsvector column
-> - **Query:** classify → dense + keyword retrieval → RRF fusion → call-graph expansion →
->   context assembly → generate with citations
+> - **Ingest:** acquire (local path or shallow clone) → walk files → route by extension →
+>   ts-morph declaration chunks *or* generic structural chunks → enrich headers → embed →
+>   store in pgvector alongside a tsvector column
+> - **Query:** classify → dense + keyword retrieval → RRF fusion → call-graph expansion
+>   (TS/JS only) → context assembly → generate with citations
 >
 > Name the actual modules so a reader can find them (`src/ingest/`, `src/retrieve/`, …).
 > Mention what runs where: one app container, one Postgres container, ingest as a separate CLI
 > process — and say *why* ingest is separate, because that answer is about the event loop.
+>
+> Make the router explicit in the diagram. It's one box, and it's the thing that makes the
+> "any language" claim true rather than aspirational.
 
 **Stack:** TypeScript (strict, ESM) · Node 24.18.0 · Express 5 · React + Vite + Tailwind ·
-Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.6-flash`
+Postgres 16 + pgvector 0.8.6 · ts-morph · Gemini `gemini-embedding-2` (768d) ·
+`gemini-3.6-flash`
 
 > Name the pgvector version explicitly in setup — verified as 0.8.6 in development. 0.8.x has
 > HNSW, `halfvec` and iterative index scans that older builds lack; a grader on a different
@@ -80,12 +99,29 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 > it is unmatchable *and* still retrievable. That concrete pair of chunks is worth more than a
 > paragraph of theory.
 >
-> What is your chunk unit and why? What metadata do you prepend before embedding, and what did
-> that do to retrieval quality? How do you handle a function larger than your chunk budget?
-> Files that fail to parse? Do you index anything at file or module granularity as well as
-> symbol granularity?
+> Then the two-tier design, which is the real decision here:
+>
+> - **TS/JS → ts-morph.** Chunk unit is the declaration. Real boundaries, real signatures,
+>   jsDoc, parent symbols, export status, and the call-graph edges Block 6 builds on.
+> - **Everything else → generic structural chunker.** Brace- and indent-aware block splitting,
+>   same enrichment header, same `Chunk` shape — with `signature` and `jsDoc` left null rather
+>   than fabricated. Say that explicitly: the honest null is the point.
+>
+> PROMPT: Why two tiers and not one? Why not tree-sitter for five languages? Name the real cost
+> you accepted — breadth without depth outside TS/JS, and no call-graph expansion there.
+>
+> Show one TS chunk beside one generic chunk of comparable code. That pair *is* the argument.
+>
+> What metadata do you prepend before embedding, and what did that do to retrieval quality? How
+> do you handle a declaration larger than your chunk budget? Files that fail to parse? Do you
+> index anything at file or module granularity as well as symbol granularity?
 >
 > If you measured a before/after on retrieval quality, put the numbers here.
+>
+> NOTES (raw material, rewrite): routing is by file extension only — no content sniffing, no
+> shebang parsing. Extensions are occasionally wrong and cheaply so, and a misroute degrades to
+> generic chunking rather than failing, because the fallback path had to exist anyway for
+> unparseable files.
 
 ---
 
@@ -95,9 +131,15 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 > lookup that embeddings miss. How do you fuse the two rankings? What are your `k` values and
 > how did you pick them?
 >
+> Note that retrieval itself is language-agnostic: by the time a chunk reaches the index it is
+> just text plus metadata, and nothing downstream branches on which chunker produced it. That's
+> a design property worth one sentence — it's why adding a parser later is additive rather than
+> a rewrite.
+>
 > Then the call-graph expansion: what triggers it, how deep do you go, how do you stop it
-> blowing the context budget? (If you cut this block, say so here and move it to future work —
-> naming it as a deliberate cut reads better than silence.)
+> blowing the context budget? Say plainly that it is TS/JS only and why. (If you cut this block,
+> say so here and move it to future work — naming it as a deliberate cut reads better than
+> silence.)
 >
 > Query routing: what categories, how do you classify, what changes per category?
 
@@ -145,7 +187,11 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 >
 > NOTES: the free-tier provider may use submitted content to improve its models. Fine for a
 > public, permissively-licensed demo corpus — worth one honest sentence here, and worth naming
-> as a real constraint on pointing this at anyone's private code as-is.
+> as a real constraint on pointing this at anyone's private code as-is. That constraint applies
+> to the local-path mode specifically, since that's the private-repo route.
+>
+> NOTES: ingest clones arbitrary public URLs. Say what you skip (binaries, lockfiles,
+> node_modules, .git, files over 1MB) and that you shallow-clone rather than pulling history.
 
 ---
 
@@ -154,14 +200,19 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 > PROMPT: Your golden question set — how many, how chosen, what do they cover? Report retrieval
 > hit rate and anything else you measured, as a table. Show a config you tried that scored worse.
 >
+> If you ran a second small set against the non-TS corpus, report it separately rather than
+> averaging the two — the gap between the AST path and the generic path is a real finding and
+> hiding it in a mean wastes it.
+>
 > A take-home with real numbers in it is rare. Even 15 questions and one comparison table puts
 > you ahead of nearly everyone.
 
-| Question type | N | Retrieval hit rate | Notes |
-|---|---|---|---|
-| Symbol lookup | | | |
-| Conceptual | | | |
-| Architectural | | | |
+| Corpus | Question type | N | Retrieval hit rate | Notes |
+|---|---|---|---|---|
+| TS (ts-morph) | Symbol lookup | | | |
+| TS (ts-morph) | Conceptual | | | |
+| TS (ts-morph) | Architectural | | | |
+| Non-TS (generic) | Mixed | | | |
 
 ---
 
@@ -170,6 +221,9 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 > PROMPT: What do you log, in what format, and how would you actually debug a bad answer with it?
 > Per-stage latency, retrieval scores, token counts, model/version. What's exposed in the UI trace
 > view versus what only hits the logs?
+>
+> The trace shows language and chunkerKind per retrieved chunk — mention it. It's how a reviewer
+> verifies the two-tier claim instead of taking your word for it.
 
 ---
 
@@ -180,7 +234,15 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 >
 > NOTES (raw material — these were decided during the build, write them up yourself):
 >
-> - **Express 5 over Next.js.** Ingest is CPU-bound ts-morph work that must be a separate
+> - **Two chunkers, not one and not five.** Implementation language and indexable languages are
+>   independent concerns — coupling them would have been an accident rather than a decision.
+>   ts-morph gives real declaration boundaries, signatures and call-graph edges for TS/JS, which
+>   is where the retrieval quality argument lives. A tree-sitter grammar per language would have
+>   bought breadth for five grammars, five node-type maps and five sets of edge cases inside an
+>   18-hour budget. The generic chunker already had to exist as the parse-failure fallback, so
+>   promoting it to a first-class route cost an extension check and covered everything else.
+>   Accepted cost: no signatures, no jsDoc and no call-graph expansion outside TS/JS.
+> - **Express 5 over Next.js.** Ingest is CPU-bound parsing work that must be a separate
 >   process regardless, so a fullstack framework covers half the system while adding a layer
 >   between you and the SSE socket. SSE cancellation semantics are where this app is actually
 >   interesting; a framework would have handled them for you and you'd have nothing to say.
@@ -201,6 +263,9 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 > `exactOptionalPropertyTypes`), module boundaries, error handling, test strategy, lint/format
 > config, commit hygiene?
 >
+> One boundary worth naming: both chunkers emit the same `Chunk` shape, and nothing downstream
+> branches on which one produced it. That's what keeps "add a parser later" additive.
+>
 > Then the part most candidates skip: **what did you deliberately not do, and why?** No auth,
 > no retries on embedding calls, thin coverage on the UI, an archived reference MCP server for
 > local DB inspection. Naming your own shortcuts reads as judgement. Pretending they aren't
@@ -212,8 +277,12 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 
 ## Known limitations
 
-> PROMPT: Be specific and unapologetic. TypeScript only. Single repo. Full re-index on change.
-> No incremental updates. Whatever you hit and chose to leave.
+> PROMPT: Be specific and unapologetic. Single repo at a time. Full re-index on change. No
+> incremental updates. Whatever you hit and chose to leave.
+>
+> Language-specific, and state it plainly rather than defensively: outside TS/JS there are no
+> signatures, no jsDoc extraction, no export detection and no call-graph expansion — retrieval
+> works, but on coarser chunks. Give a rough sense of how much worse if you measured it.
 >
 > Include the code-retrieval edge cases you did *not* solve — barrel-file re-exports, symbol
 > collisions across modules, dynamic imports, generated code. Showing you can name them is most
@@ -221,6 +290,10 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 >
 > NOTES: ingestion is CLI-only — a reviewer opening the UI can only query the corpus you shipped.
 > Say so plainly and point at the one-command re-index rather than letting them discover it.
+>
+> NOTES: repo acquisition is public HTTPS clone or local path only. No SSH, no tokens, no
+> private-repo auth — deliberate, since local paths cover that case without building a
+> credential story in an 18-hour build.
 >
 > NOTES: cancellation is best-effort on both paths — the LLM signal is client-side only (the
 > service keeps generating and still bills), and node-postgres ignores AbortSignal entirely.
@@ -244,6 +317,10 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 > Two things from the build belong here specifically: why ingest must never run inline in a
 > request handler, and what leaks when SSE connections are abandoned without cleanup.
 >
+> A third, if you have room: cloning untrusted repos is a real production concern — disk quotas,
+> clone timeouts, and running the walker somewhere isolated. You skipped all of it for a local
+> prototype; say what you'd add.
+>
 > Keep it concrete. Generic cloud vocabulary is transparent; specific numbers and trade-offs
 > are not.
 
@@ -264,6 +341,11 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 >
 > Concrete examples beat philosophy. "It produced a chunker that split mid-function, so I
 > rewrote the traversal by hand" is worth more than a paragraph on AI-assisted workflow.
+>
+> One example worth telling if you want a scoping one: the first Block 1 plan was written
+> "ts-morph only, TypeScript repos", which quietly coupled the implementation language to the
+> indexable languages. Caught it in plan review before any code existed and split the design
+> into two tiers — cheap at plan stage, expensive after three slices.
 
 ---
 
@@ -271,10 +353,15 @@ Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.
 
 > PROMPT: Ranked, with reasoning. This is where you show you know the difference between what
 > you built and what it should be. Three or four items with real justification beats ten bullets.
+>
+> Tree-sitter grammars for Python/Go/Rust behind the same router interface is an obvious #1
+> candidate — the seam already exists, which is what makes it a credible next step rather than
+> a wish.
 
 ---
 
 ## Screenshots
 
 > PROMPT: Embed them. A short screen recording if you have time — the brief asks. Show the trace
-> view, not just the chat, since that's the part reviewers won't expect.
+> view, not just the chat, since that's the part reviewers won't expect. If you have both corpora
+> indexed, one screenshot of a non-TS answer proves the tiering better than a paragraph.
