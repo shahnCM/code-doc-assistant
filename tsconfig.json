@@ -6,6 +6,6 @@
     "exactOptionalPropertyTypes": true, "verbatimModuleSyntax": true,
     "skipLibCheck": true, "types": ["node"]
   },
-  "include": ["src", "tests"],
+  "include": ["src", "tests", "migrations"],
   "exclude": ["src/web"]
 }
