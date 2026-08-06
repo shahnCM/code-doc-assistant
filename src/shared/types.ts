@@ -67,6 +67,7 @@ export interface IngestReport {
   skipped: number;
   totalChunks: number;
   commitSha: string | null;
+  failures: ChunkError[];
 }
 
 export interface AcquiredRepo {

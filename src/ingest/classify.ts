@@ -21,6 +21,7 @@ const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
   '.cc': 'cpp',
   '.cxx': 'cpp',
   '.json': 'json',
+  '.toml': 'toml',
   '.yml': 'yaml',
   '.yaml': 'yaml',
   '.sh': 'shell',

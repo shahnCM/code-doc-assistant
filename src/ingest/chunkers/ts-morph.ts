@@ -1,6 +1,7 @@
 import {
   type ArrowFunction,
   type ClassDeclaration,
+  type ConstructorDeclaration,
   type EnumDeclaration,
   type FunctionDeclaration,
   type FunctionExpression,
@@ -15,6 +16,7 @@ import {
   type SourceFile,
   type Statement,
   type TypeAliasDeclaration,
+  type TypeNode,
   type TypeParameteredNode,
   type VariableDeclaration,
   type VariableStatement,
@@ -100,6 +102,26 @@ function buildChunk(input: BuiltChunkInput): Chunk {
   };
 }
 
+type ChunkBase = Omit<BuiltChunkInput, 'startLine' | 'endLine' | 'content' | 'partIndex' | 'partTotal'>;
+
+function maybeSplit(base: ChunkBase, startLine: number, endLine: number, content: string): Chunk[] {
+  if (estimateTokens(content) <= MAX_TOKENS) {
+    return [buildChunk({ ...base, startLine, endLine, content })];
+  }
+
+  const windows = tagParts(splitByLines(content, startLine, MAX_TOKENS));
+  return windows.map((w) =>
+    buildChunk({
+      ...base,
+      startLine: w.startLine,
+      endLine: w.endLine,
+      content: w.content,
+      partIndex: w.partIndex,
+      partTotal: w.partTotal,
+    }),
+  );
+}
+
 function classSignature(classDecl: ClassDeclaration): string {
   const name = classDecl.getName() ?? '';
   const extendsClause = classDecl.getExtends();
@@ -116,9 +138,13 @@ function methodSignature(method: MethodDeclaration): string {
   return `${modifiersPrefix(method)}${generator}${method.getName()}${optional}${typeParamsSuffix(method)}${paramsGroup(method)}${returnTypeSuffix(method)}`;
 }
 
+function constructorSignature(ctor: ConstructorDeclaration): string {
+  return `${modifiersPrefix(ctor)}constructor${paramsGroup(ctor)}`;
+}
+
 function classChunks(candidate: Candidate, classDecl: ClassDeclaration): Chunk[] {
   const name = classDecl.getName() ?? null;
-  const startLine = classDecl.getStartLineNumber(true);
+  const startLine = classDecl.getStartLineNumber();
   const endLine = classDecl.getEndLineNumber();
   const content = classDecl.getText();
   const isExported = classDecl.isExported();
@@ -140,24 +166,78 @@ function classChunks(candidate: Candidate, classDecl: ClassDeclaration): Chunk[]
     ];
   }
 
+  const sourceLines = classDecl.getSourceFile().getFullText().split('\n');
   const methods = classDecl.getMethods();
-  const partTotal = methods.length;
-  return methods.map((method, index) =>
+  const constructorDecl = classDecl.getConstructors()[0];
+
+  // Header content stops before the constructor/first method's own leading trivia (JSDoc
+  // included), so the header and the members that follow never overlap in source lines.
+  const boundaryStarts = [
+    ...(constructorDecl ? [constructorDecl.getStartLineNumber(true)] : []),
+    ...methods.map((m) => m.getStartLineNumber(true)),
+  ];
+  const headerEndLine = boundaryStarts.length > 0 ? Math.min(...boundaryStarts) - 1 : endLine;
+  const headerContent = sourceLines.slice(startLine - 1, headerEndLine).join('\n');
+
+  const partTotal = 1 + (constructorDecl ? 1 : 0) + methods.length;
+  let partIndex = 1;
+
+  const chunks: Chunk[] = [
     buildChunk({
       candidate,
-      symbolName: method.getName(),
-      kind: 'method',
-      signature: methodSignature(method),
-      jsDoc: jsDocText(method),
-      startLine: method.getStartLineNumber(true),
-      endLine: method.getEndLineNumber(),
-      parentSymbol: name,
+      symbolName: name,
+      kind: 'class',
+      signature: classSignature(classDecl),
+      jsDoc: jsDocText(classDecl),
+      startLine,
+      endLine: headerEndLine,
+      parentSymbol: null,
       isExported,
-      content: method.getText(),
-      partIndex: index + 1,
+      content: headerContent,
+      partIndex: partIndex++,
       partTotal,
     }),
-  );
+  ];
+
+  if (constructorDecl) {
+    chunks.push(
+      buildChunk({
+        candidate,
+        symbolName: 'constructor',
+        kind: 'method',
+        signature: constructorSignature(constructorDecl),
+        jsDoc: jsDocText(constructorDecl),
+        startLine: constructorDecl.getStartLineNumber(),
+        endLine: constructorDecl.getEndLineNumber(),
+        parentSymbol: name,
+        isExported,
+        content: constructorDecl.getText(),
+        partIndex: partIndex++,
+        partTotal,
+      }),
+    );
+  }
+
+  for (const method of methods) {
+    chunks.push(
+      buildChunk({
+        candidate,
+        symbolName: method.getName(),
+        kind: 'method',
+        signature: methodSignature(method),
+        jsDoc: jsDocText(method),
+        startLine: method.getStartLineNumber(),
+        endLine: method.getEndLineNumber(),
+        parentSymbol: name,
+        isExported,
+        content: method.getText(),
+        partIndex: partIndex++,
+        partTotal,
+      }),
+    );
+  }
+
+  return chunks;
 }
 
 function functionSignature(fn: FunctionDeclaration): string {
@@ -166,8 +246,13 @@ function functionSignature(fn: FunctionDeclaration): string {
   return `${modifiersPrefix(fn)}function${generator} ${name}${typeParamsSuffix(fn)}${paramsGroup(fn)}${returnTypeSuffix(fn)}`;
 }
 
-function groupStatementsByBudget(sourceLines: string[], statements: readonly Statement[]): Statement[][] {
-  const groups: Statement[][] = [];
+interface StatementGroup {
+  statements: readonly Statement[];
+  startLine: number;
+}
+
+function groupStatementsByBudget(sourceLines: string[], statements: readonly Statement[]): StatementGroup[] {
+  const groups: StatementGroup[] = [];
   let current: Statement[] = [];
   let groupStartLine = 0;
 
@@ -175,14 +260,14 @@ function groupStatementsByBudget(sourceLines: string[], statements: readonly Sta
     if (current.length > 0) {
       const candidateContent = sourceLines.slice(groupStartLine - 1, statement.getEndLineNumber()).join('\n');
       if (estimateTokens(candidateContent) > MAX_TOKENS) {
-        groups.push(current);
+        groups.push({ statements: current, startLine: groupStartLine });
         current = [];
       }
     }
     if (current.length === 0) groupStartLine = statement.getStartLineNumber();
     current.push(statement);
   }
-  if (current.length > 0) groups.push(current);
+  if (current.length > 0) groups.push({ statements: current, startLine: groupStartLine });
 
   return groups;
 }
@@ -192,9 +277,9 @@ function packStatementsByBudget(sourceLines: string[], statements: readonly Stat
   const bodyEndLine = statements[statements.length - 1]?.getEndLineNumber() ?? 0;
 
   return groups.map((group, index) => {
-    const startLine = group[0]!.getStartLineNumber();
+    const startLine = group.startLine;
     const nextGroup = groups[index + 1];
-    const endLine = nextGroup ? nextGroup[0]!.getStartLineNumber() - 1 : bodyEndLine;
+    const endLine = nextGroup ? nextGroup.startLine - 1 : bodyEndLine;
     return { startLine, endLine, content: sourceLines.slice(startLine - 1, endLine).join('\n') };
   });
 }
@@ -217,7 +302,7 @@ function functionChunks(candidate: Candidate, fn: FunctionDeclaration): Chunk[] 
         kind: 'function',
         signature,
         jsDoc,
-        startLine: fn.getStartLineNumber(true),
+        startLine: fn.getStartLineNumber(),
         endLine: fn.getEndLineNumber(),
         parentSymbol: null,
         isExported,
@@ -253,40 +338,68 @@ function interfaceSignature(iface: InterfaceDeclaration): string {
   return `${modifiersPrefix(iface)}interface ${iface.getName()}${typeParamsSuffix(iface)}${extendsText}`;
 }
 
-function interfaceChunk(candidate: Candidate, iface: InterfaceDeclaration): Chunk {
-  return buildChunk({
-    candidate,
-    symbolName: iface.getName(),
-    kind: 'interface',
-    signature: interfaceSignature(iface),
-    jsDoc: jsDocText(iface),
-    startLine: iface.getStartLineNumber(true),
-    endLine: iface.getEndLineNumber(),
-    parentSymbol: null,
-    isExported: iface.isExported(),
-    content: iface.getText(),
-  });
+function interfaceChunks(candidate: Candidate, iface: InterfaceDeclaration): Chunk[] {
+  return maybeSplit(
+    {
+      candidate,
+      symbolName: iface.getName(),
+      kind: 'interface',
+      signature: interfaceSignature(iface),
+      jsDoc: jsDocText(iface),
+      parentSymbol: null,
+      isExported: iface.isExported(),
+    },
+    iface.getStartLineNumber(),
+    iface.getEndLineNumber(),
+    iface.getText(),
+  );
+}
+
+// Condenses a type node to a short signature fragment instead of serialising it whole —
+// the same "compose from fields, never getText the whole node" rule applied to functions.
+function condensedTypeText(typeNode: TypeNode): string {
+  if (Node.isTypeLiteral(typeNode)) {
+    const memberNames = typeNode.getMembers().map((m) =>
+      Node.isPropertySignature(m) || Node.isMethodSignature(m) ? m.getName() : m.getKindName(),
+    );
+    return `{ ${memberNames.join('; ')} }`;
+  }
+  if (Node.isUnionTypeNode(typeNode)) {
+    return typeNode
+      .getTypeNodes()
+      .map((t) => condensedTypeText(t))
+      .join(' | ');
+  }
+  if (Node.isIntersectionTypeNode(typeNode)) {
+    return typeNode
+      .getTypeNodes()
+      .map((t) => condensedTypeText(t))
+      .join(' & ');
+  }
+  return typeNode.getText();
 }
 
 function typeAliasSignature(alias: TypeAliasDeclaration): string {
   const typeNode = alias.getTypeNode();
-  const typeText = typeNode ? typeNode.getText() : '';
+  const typeText = typeNode ? condensedTypeText(typeNode) : '';
   return `${modifiersPrefix(alias)}type ${alias.getName()}${typeParamsSuffix(alias)} = ${typeText}`;
 }
 
-function typeAliasChunk(candidate: Candidate, alias: TypeAliasDeclaration): Chunk {
-  return buildChunk({
-    candidate,
-    symbolName: alias.getName(),
-    kind: 'type-alias',
-    signature: typeAliasSignature(alias),
-    jsDoc: jsDocText(alias),
-    startLine: alias.getStartLineNumber(true),
-    endLine: alias.getEndLineNumber(),
-    parentSymbol: null,
-    isExported: alias.isExported(),
-    content: alias.getText(),
-  });
+function typeAliasChunks(candidate: Candidate, alias: TypeAliasDeclaration): Chunk[] {
+  return maybeSplit(
+    {
+      candidate,
+      symbolName: alias.getName(),
+      kind: 'type-alias',
+      signature: typeAliasSignature(alias),
+      jsDoc: jsDocText(alias),
+      parentSymbol: null,
+      isExported: alias.isExported(),
+    },
+    alias.getStartLineNumber(),
+    alias.getEndLineNumber(),
+    alias.getText(),
+  );
 }
 
 function enumSignature(enumDecl: EnumDeclaration): string {
@@ -304,7 +417,7 @@ function enumChunk(candidate: Candidate, enumDecl: EnumDeclaration): Chunk {
     kind: 'enum',
     signature: enumSignature(enumDecl),
     jsDoc: jsDocText(enumDecl),
-    startLine: enumDecl.getStartLineNumber(true),
+    startLine: enumDecl.getStartLineNumber(),
     endLine: enumDecl.getEndLineNumber(),
     parentSymbol: null,
     isExported: enumDecl.isExported(),
@@ -332,7 +445,7 @@ function constSignature(decl: VariableDeclaration): string {
   }
 
   const typeNode = decl.getTypeNode();
-  return typeNode ? `const ${name}: ${typeNode.getText()}` : `const ${name}`;
+  return typeNode ? `const ${name}: ${condensedTypeText(typeNode)}` : `const ${name}`;
 }
 
 function qualifyingDeclarator(
@@ -358,7 +471,7 @@ function constChunk(candidate: Candidate, statement: VariableStatement): Chunk |
     kind: 'const',
     signature: constSignature(qualifying),
     jsDoc: jsDocText(statement),
-    startLine: statement.getStartLineNumber(true),
+    startLine: statement.getStartLineNumber(),
     endLine: statement.getEndLineNumber(),
     parentSymbol: null,
     isExported: isExportedStatement,
@@ -383,21 +496,23 @@ function reExportChunk(candidate: Candidate, sourceFile: SourceFile): Chunk {
   });
 }
 
-function wholeFileChunk(candidate: Candidate, sourceFile: SourceFile): Chunk {
+function wholeFileChunks(candidate: Candidate, sourceFile: SourceFile): Chunk[] {
   const content = sourceFile.getFullText();
   const lastLine = sourceFile.getEndLineNumber();
-  return buildChunk({
-    candidate,
-    symbolName: null,
-    kind: 'file',
-    signature: null,
-    jsDoc: null,
-    startLine: 1,
-    endLine: lastLine,
-    parentSymbol: null,
-    isExported: false,
+  return maybeSplit(
+    {
+      candidate,
+      symbolName: null,
+      kind: 'file',
+      signature: null,
+      jsDoc: null,
+      parentSymbol: null,
+      isExported: false,
+    },
+    1,
+    lastLine,
     content,
-  });
+  );
 }
 
 function collectChunks(candidate: Candidate, sourceFile: SourceFile): Chunk[] {
@@ -410,9 +525,9 @@ function collectChunks(candidate: Candidate, sourceFile: SourceFile): Chunk[] {
     } else if (Node.isFunctionDeclaration(statement)) {
       chunks.push(...functionChunks(candidate, statement));
     } else if (Node.isInterfaceDeclaration(statement)) {
-      chunks.push(interfaceChunk(candidate, statement));
+      chunks.push(...interfaceChunks(candidate, statement));
     } else if (Node.isTypeAliasDeclaration(statement)) {
-      chunks.push(typeAliasChunk(candidate, statement));
+      chunks.push(...typeAliasChunks(candidate, statement));
     } else if (Node.isEnumDeclaration(statement)) {
       chunks.push(enumChunk(candidate, statement));
     } else if (Node.isVariableStatement(statement)) {
@@ -462,7 +577,7 @@ function chunkSource(candidate: Candidate, source: string): Result<ChunkerOutput
 
       const chunks = collectChunks(candidate, sourceFile);
       if (chunks.length === 0) {
-        return { ok: true, value: { chunks: [wholeFileChunk(candidate, sourceFile)], outcome: 'no-declarations' } };
+        return { ok: true, value: { chunks: wholeFileChunks(candidate, sourceFile), outcome: 'no-declarations' } };
       }
       return { ok: true, value: { chunks, outcome: 'chunked' } };
     } finally {

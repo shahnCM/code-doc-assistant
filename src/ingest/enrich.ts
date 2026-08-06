@@ -49,6 +49,7 @@ function buildHeader(chunk: Chunk): string {
   if (chunk.symbolName) lines.push(`symbol: ${chunk.symbolName}`);
   if (chunk.parentSymbol) lines.push(`parent: ${chunk.parentSymbol}`);
   if (chunk.signature) lines.push(`signature: ${chunk.signature}`);
+  if (chunk.jsDoc) lines.push(`jsDoc: ${chunk.jsDoc}`);
   return lines.join('\n');
 }
 

@@ -48,19 +48,76 @@ describe('tsMorphChunker.chunk — classes', () => {
 
     expect(result.value.outcome).toBe('chunked');
     const chunks = result.value.chunks;
-    expect(chunks.length).toBe(3);
-    expect(chunks.map((c) => c.symbolName)).toEqual(['alpha', 'beta', 'gamma']);
+    expect(chunks.length).toBe(4);
 
-    for (const c of chunks) {
+    const [header, ...methodChunks] = chunks;
+    expect(header?.kind).toBe('class');
+    expect(header?.symbolName).toBe('Foo');
+    expect(header?.parentSymbol).toBeNull();
+
+    expect(methodChunks.map((c) => c.symbolName)).toEqual(['alpha', 'beta', 'gamma']);
+    for (const c of methodChunks) {
       expect(c.kind).toBe('method');
       expect(c.parentSymbol).toBe('Foo');
-      expect(c.partTotal).toBe(3);
       expect(c.content.trim().endsWith('}')).toBe(true);
     }
-    expect(chunks.map((c) => c.partIndex)).toEqual([1, 2, 3]);
-    expect(chunks[0]?.content.trim().startsWith('alpha(): number {')).toBe(true);
-    expect(chunks[1]?.content.trim().startsWith('beta(): number {')).toBe(true);
-    expect(chunks[2]?.content.trim().startsWith('gamma(): number {')).toBe(true);
+    expect(chunks.every((c) => c.partTotal === 4)).toBe(true);
+    expect(chunks.map((c) => c.partIndex)).toEqual([1, 2, 3, 4]);
+    expect(methodChunks[0]?.content.trim().startsWith('alpha(): number {')).toBe(true);
+    expect(methodChunks[1]?.content.trim().startsWith('beta(): number {')).toBe(true);
+    expect(methodChunks[2]?.content.trim().startsWith('gamma(): number {')).toBe(true);
+  });
+
+  it('[REQ] an oversized class keeps its fields, constructor, and class JSDoc findable in the index', () => {
+    const source = [
+      '/**',
+      ' * Foo does things.',
+      ' */',
+      'export class Foo {',
+      '  private count: number;',
+      '  private label: string;',
+      '',
+      '  constructor(count: number, label: string) {',
+      '    this.count = count;',
+      '    this.label = label;',
+      '  }',
+      '',
+      '  alpha(): number {',
+      padLines(60),
+      '    return 1;',
+      '  }',
+      '',
+      '  beta(): number {',
+      padLines(60),
+      '    return 2;',
+      '  }',
+      '}',
+      '',
+    ].join('\n');
+
+    const result = tsMorphChunker.chunk(candidate('foo.ts'), source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const chunks = result.value.chunks;
+
+    const header = chunks.find((c) => c.kind === 'class');
+    expect(header?.symbolName).toBe('Foo');
+    expect(header?.jsDoc).toContain('Foo does things.');
+    expect(header?.content).toContain('private count: number;');
+    expect(header?.content).toContain('private label: string;');
+    expect(header?.content).not.toContain('this.count = count;');
+
+    const ctor = chunks.find((c) => c.symbolName === 'constructor');
+    expect(ctor).toBeDefined();
+    expect(ctor?.kind).toBe('method');
+    expect(ctor?.parentSymbol).toBe('Foo');
+    expect(ctor?.content).toContain('this.count = count;');
+
+    const methodNames = chunks
+      .filter((c) => c.kind === 'method' && c.symbolName !== 'constructor')
+      .map((c) => c.symbolName);
+    expect(methodNames).toEqual(['alpha', 'beta']);
   });
 
   it('keeps a class under budget as a single class chunk with no parent', () => {
@@ -184,7 +241,7 @@ describe('tsMorphChunker.chunk — signature composition', () => {
     expect(chunk?.signature?.includes('\n')).toBe(false);
   });
 
-  it('captures jsDoc and includes it in startLine', () => {
+  it('captures jsDoc separately; startLine reflects the declaration line, not the JSDoc line', () => {
     const source = [
       '/**',
       ' * Adds two numbers.',
@@ -201,8 +258,9 @@ describe('tsMorphChunker.chunk — signature composition', () => {
 
     const chunk = result.value.chunks[0];
     expect(chunk?.jsDoc).toContain('Adds two numbers.');
-    expect(chunk?.startLine).toBe(1);
+    expect(chunk?.startLine).toBe(4);
     expect(chunk?.endLine).toBe(6);
+    expect(chunk?.content.startsWith('export function add')).toBe(true);
   });
 });
 
@@ -299,5 +357,70 @@ describe('tsMorphChunker.chunk — oversized function splitting', () => {
     expect(result.value.chunks.length).toBe(1);
     expect(result.value.chunks[0]?.partIndex).toBe(1);
     expect(result.value.chunks[0]?.partTotal).toBe(1);
+  });
+});
+
+describe('tsMorphChunker.chunk — signature composition avoids duplicating content', () => {
+  it('condenses a type alias with a large object type instead of duplicating its full text', () => {
+    const members = Array.from({ length: 40 }, (_, i) => `  field${i}: string;`).join('\n');
+    const source = ['export type Big = {', members, '};', ''].join('\n');
+
+    const result = tsMorphChunker.chunk(candidate('big-type.ts'), source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const chunk = result.value.chunks[0];
+    expect(chunk?.kind).toBe('type-alias');
+    expect(chunk?.signature?.includes('\n')).toBe(false);
+    expect(chunk?.signature?.length ?? 0).toBeLessThan((chunk?.content.length ?? 0) / 2);
+  });
+
+  it('condenses a const with a large object type annotation instead of duplicating its full text', () => {
+    const members = Array.from({ length: 40 }, (_, i) => `  field${i}: string;`).join('\n');
+    const source = ['export const config: {', members, '} = {};', ''].join('\n');
+
+    const result = tsMorphChunker.chunk(candidate('big-const.ts'), source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const chunk = result.value.chunks[0];
+    expect(chunk?.kind).toBe('const');
+    expect(chunk?.signature?.includes('\n')).toBe(false);
+    expect(chunk?.signature?.length ?? 0).toBeLessThan((chunk?.content.length ?? 0) / 2);
+  });
+
+  it('keeps interface signature condensed with no member-list duplication', () => {
+    const members = Array.from({ length: 40 }, (_, i) => `  field${i}: string;`).join('\n');
+    const source = ['export interface Big {', members, '}', ''].join('\n');
+
+    const result = tsMorphChunker.chunk(candidate('big-iface.ts'), source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const chunk = result.value.chunks[0];
+    expect(chunk?.kind).toBe('interface');
+    expect(chunk?.signature).toBe('export interface Big');
+    expect(chunk?.signature?.length ?? 0).toBeLessThan((chunk?.content.length ?? 0) / 2);
+  });
+});
+
+describe('tsMorphChunker.chunk — oversized file with zero declarations', () => {
+  it('[REQ] splits an oversized file with no declarations into multiple parts, none exceeding budget', () => {
+    const lines = Array.from({ length: 200 }, (_, i) => `console.log('side effect number ${i} padding padding');`);
+    const source = `${lines.join('\n')}\n`;
+
+    const result = tsMorphChunker.chunk(candidate('side-big.ts'), source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.outcome).toBe('no-declarations');
+    const chunks = result.value.chunks;
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const c of chunks) {
+      expect(estimateTokens(c.content)).toBeLessThanOrEqual(512);
+      expect(c.kind).toBe('file');
+    }
+    expect(chunks.map((c) => c.partIndex)).toEqual(chunks.map((_, i) => i + 1));
+    expect(chunks.every((c) => c.partTotal === chunks.length)).toBe(true);
   });
 });

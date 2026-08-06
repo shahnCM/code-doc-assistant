@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import type { Chunk, IngestReport, Result } from '../shared/types.js';
+import type { Chunk, ChunkError, IngestReport, Result } from '../shared/types.js';
 import { acquireRepo, type AcquireOptions, type GitRunner, realGitRunner } from './acquire.js';
 import { type Chunker, registry, selectChunker } from './chunkers/index.js';
 import { enrich } from './enrich.js';
@@ -30,6 +30,7 @@ export async function runPipeline(
   let noDeclarations = 0;
   let failed = 0;
   let skipped = 0;
+  const failures: ChunkError[] = [];
 
   for await (const entry of walk(acquired.value.rootDir)) {
     if (entry.type === 'skipped') {
@@ -43,12 +44,14 @@ export async function runPipeline(
       const chunker = selectChunker(entry.candidate, chunkers);
       if (!chunker) {
         failed++;
+        failures.push({ filePath: entry.candidate.filePath, reason: 'no chunker matched this file' });
         continue;
       }
 
       const result = chunker.chunk(entry.candidate, source);
       if (!result.ok) {
         failed++;
+        failures.push(result.error);
         continue;
       }
 
@@ -60,8 +63,12 @@ export async function runPipeline(
       } else {
         noDeclarations++;
       }
-    } catch {
+    } catch (error) {
       failed++;
+      failures.push({
+        filePath: entry.candidate.filePath,
+        reason: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -80,6 +87,7 @@ export async function runPipeline(
         skipped,
         totalChunks: enrichedChunks.length,
         commitSha: acquired.value.commitSha,
+        failures,
       },
     },
   };

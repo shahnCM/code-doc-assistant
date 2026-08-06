@@ -38,6 +38,33 @@ describe('tagParts', () => {
   });
 });
 
+describe('enrich — startLine/content span and jsDoc in the header', () => {
+  it("[REQ] startLine..endLine matches content's real line span, and jsDoc text appears in embedText", () => {
+    const source = [
+      '/**',
+      ' * Adds two numbers together.',
+      ' */',
+      'export function add(a: number, b: number): number {',
+      '  return a + b;',
+      '}',
+      '',
+    ].join('\n');
+
+    const result = tsMorphChunker.chunk(candidate('add.ts', '.ts', 'typescript'), source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const [enriched] = enrich(result.value.chunks);
+    expect(enriched?.jsDoc).toContain('Adds two numbers together.');
+    expect(enriched?.content.startsWith('export function add')).toBe(true);
+
+    const contentLineCount = enriched?.content.split('\n').length ?? 0;
+    expect((enriched?.endLine ?? 0) - (enriched?.startLine ?? 0) + 1).toBe(contentLineCount);
+
+    expect(enriched?.embedText).toContain('Adds two numbers together.');
+  });
+});
+
 describe('enrich', () => {
   it('[REQ] gives every chunk from both chunkers an enrichment header, without fabricating generic signature/jsDoc', () => {
     const tsResult = tsMorphChunker.chunk(

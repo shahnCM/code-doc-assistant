@@ -14,12 +14,20 @@ describe('contentHash', () => {
     expect(a).toBe(b);
   });
 
-  it('is unchanged when a line is inserted elsewhere in the file', () => {
-    const chunkContent = 'function fn() {\n  return 1;\n}';
-    const beforeInsertion = contentHash('ts-morph', 'src/a.ts', 'fn', 1, chunkContent);
-    // A line inserted above this declaration shifts its line numbers but not its own text.
-    const afterInsertion = contentHash('ts-morph', 'src/a.ts', 'fn', 1, chunkContent);
-    expect(beforeInsertion).toBe(afterInsertion);
+  it('is unchanged when a line is inserted elsewhere in the file, shifting the declaration but not its text', () => {
+    const before = ['function fn() {', '  return 1;', '}', ''].join('\n');
+    const after = ['// a comment inserted above', 'function fn() {', '  return 1;', '}', ''].join('\n');
+
+    // Declaration sits at line 1 in `before` and line 2 in `after` — different startLine,
+    // same declaration text. contentHash takes content, not line numbers, so slicing each
+    // version at its own (shifted) position must yield identical content and therefore hashes.
+    const beforeContent = before.split('\n').slice(0, 3).join('\n');
+    const afterContent = after.split('\n').slice(1, 4).join('\n');
+    expect(beforeContent).toBe(afterContent);
+
+    const beforeHash = contentHash('ts-morph', 'src/a.ts', 'fn', 1, beforeContent);
+    const afterHash = contentHash('ts-morph', 'src/a.ts', 'fn', 1, afterContent);
+    expect(afterHash).toBe(beforeHash);
   });
 
   it('differs when chunkerKind differs for otherwise identical input', () => {

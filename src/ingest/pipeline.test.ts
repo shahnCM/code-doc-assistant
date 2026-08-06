@@ -89,6 +89,23 @@ describe('runPipeline — failure isolation and reporting', () => {
   });
 });
 
+describe('runPipeline — failure reasons', () => {
+  it('[REQ] a forced failure surfaces a non-empty reason in the report', async () => {
+    workDir = await mkdtemp(path.join(tmpdir(), 'pipeline-test-'));
+    await writeFile(path.join(workDir, 'fail.ts'), 'anything\n');
+
+    const result = await runPipeline(workDir, {}, [outcomeFakeChunker()], noopGit);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const { report } = result.value;
+    expect(report.failed).toBe(1);
+    expect(report.failures.length).toBe(1);
+    expect(report.failures[0]?.filePath).toBe('fail.ts');
+    expect(report.failures[0]?.reason.length).toBeGreaterThan(0);
+  });
+});
+
 describe('runPipeline — parser-agnostic', () => {
   it('[REQ] a fake chunker drives a full run end-to-end, producing enriched, hashed chunks', async () => {
     workDir = await mkdtemp(path.join(tmpdir(), 'pipeline-test-'));

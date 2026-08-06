@@ -106,13 +106,17 @@ function indentModeBlocks(source: string): RawBlock[] {
   let blockStartLine = 1;
   let blockLines: string[] = [];
   let started = false;
+  let pendingDecorator = false;
 
   for (let i = 0; i < lines.length; i++) {
     const lineNo = i + 1;
     const line = lines[i] ?? '';
-    const isTopLevel = line.trim() !== '' && line[0] !== ' ' && line[0] !== '\t';
+    const trimmed = line.trim();
+    const isTopLevel = trimmed !== '' && line[0] !== ' ' && line[0] !== '\t';
 
-    if (isTopLevel && started) {
+    // A decorator line attaches to whatever follows, so it must not close the block that
+    // precedes it — the boundary belongs before the decorator, not after it.
+    if (isTopLevel && started && !pendingDecorator) {
       const content = blockLines.join('\n');
       if (content.trim() !== '') {
         blocks.push({ startLine: blockStartLine, endLine: lineNo - 1, content });
@@ -123,6 +127,7 @@ function indentModeBlocks(source: string): RawBlock[] {
 
     blockLines.push(line);
     if (isTopLevel) started = true;
+    pendingDecorator = isTopLevel && trimmed.startsWith('@');
   }
 
   const content = blockLines.join('\n');
@@ -162,9 +167,12 @@ function splitLargeBlock(block: RawBlock): RawBlock[] {
 }
 
 function extractSymbolName(content: string): string | null {
-  const firstLine = content.split('\n').find((line) => line.trim() !== '');
-  if (!firstLine) return null;
-  const match = DEFINITION_PATTERN.exec(firstLine.trim());
+  const definitionLine = content
+    .split('\n')
+    .map((line) => line.trim())
+    .find((line) => line !== '' && !line.startsWith('@'));
+  if (!definitionLine) return null;
+  const match = DEFINITION_PATTERN.exec(definitionLine);
   return match?.[1] ?? null;
 }
 

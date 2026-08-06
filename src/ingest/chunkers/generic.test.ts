@@ -127,6 +127,36 @@ describe('genericChunker.chunk — token budget merge/split', () => {
   });
 });
 
+describe('genericChunker.chunk — decorator attachment', () => {
+  it('[REQ] keeps a decorator line attached to the def/class it modifies, so symbolName still resolves', () => {
+    const source = [
+      '@nox.session',
+      'def build_and_check_dists(session):',
+      '    session.install("build")',
+      '    session.run("python", "-m", "build")',
+      '    session.log("build complete")',
+      '',
+      '',
+      '@nox.session(python="3.11")',
+      'def tests(session):',
+      '    session.install("pytest")',
+      '    session.run("pytest", "tests/")',
+      '    session.log("tests complete")',
+      '',
+    ].join('\n');
+
+    const result = genericChunker.chunk(candidate('noxfile.py', '.py', 'python'), source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const chunks = result.value.chunks;
+    expect(chunks.map((c) => c.symbolName)).toEqual(['build_and_check_dists', 'tests']);
+    for (const c of chunks) {
+      expect(c.content).toContain('@nox.session');
+    }
+  });
+});
+
 describe('genericChunker.chunk — best-effort symbolName', () => {
   it('is null when the first line is not definition-shaped', () => {
     const source = ['someValue = 42;', 'anotherValue = someValue + 1;', ''].join('\n');

@@ -21,6 +21,10 @@ describe('classify', () => {
     expect(classify('data.unknownext').language).toBe('unknown');
   });
 
+  it('routes .toml to toml', () => {
+    expect(classify('pyproject.toml').language).toBe('toml');
+  });
+
   it('returns extension and language only — no chunker knowledge', () => {
     const result = classify('src/index.ts');
     expect(result).toEqual({ extension: '.ts', language: 'typescript' });
