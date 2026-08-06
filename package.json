@@ -6,7 +6,8 @@
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/web/tsconfig.json",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "ingest": "tsx src/ingest/cli.ts"
   },
   "keywords": [],
   "author": "",

@@ -4,7 +4,7 @@
     "module": "nodenext", "moduleResolution": "nodenext",
     "noEmit": true, "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true, "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true, "types": ["node"]
   },
   "include": ["src", "tests"],
   "exclude": ["src/web"]
