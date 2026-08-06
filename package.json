@@ -7,7 +7,7 @@
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/web/tsconfig.json",
     "lint": "eslint .",
-    "ingest": "tsx src/ingest/cli.ts",
+    "ingest": "tsx --env-file=.env src/ingest/cli.ts",
     "migrate": "node --env-file=.env node_modules/.bin/node-pg-migrate up"
   },
   "keywords": [],

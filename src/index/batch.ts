@@ -10,8 +10,9 @@ export interface EmbedBatchOptions {
 
 const DEFAULT_BATCH_SIZE = 20;
 const DEFAULT_CONCURRENCY = 5;
-const DEFAULT_MAX_RETRIES = 5;
+const DEFAULT_MAX_RETRIES = 20;
 const DEFAULT_BASE_DELAY_MS = 500;
+const MAX_BACKOFF_MS = 65_000;
 
 function chunkInto<T>(items: readonly T[], size: number): T[][] {
   const chunks: T[][] = [];
@@ -25,6 +26,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Prefers the server's own suggested wait (parsed from a 429's `retryDelay`) over blind
+ * exponential backoff — verified against the real free-tier quota (100 embed_content
+ * "requests" per minute, counted per text) that a fixed exponential schedule undershoots.
+ */
+function computeRetryDelayMs(error: EmbedError, attempt: number, baseDelayMs: number): number {
+  if (error.retryAfterMs !== undefined) {
+    return Math.min(error.retryAfterMs, MAX_BACKOFF_MS);
+  }
+  const exponential = baseDelayMs * 2 ** attempt + Math.random() * baseDelayMs;
+  return Math.min(exponential, MAX_BACKOFF_MS);
+}
+
 async function embedBatchWithRetry(
   batch: readonly string[],
   client: EmbedClient,
@@ -36,8 +50,7 @@ async function embedBatchWithRetry(
     const result = await client.embedBatch(batch);
     if (result.ok) return result;
     if (result.error.kind !== 'rate-limit' || attempt >= maxRetries) return result;
-    const delay = baseDelayMs * 2 ** attempt + Math.random() * baseDelayMs;
-    await sleep(delay);
+    await sleep(computeRetryDelayMs(result.error, attempt, baseDelayMs));
     attempt += 1;
   }
 }

@@ -89,4 +89,47 @@ describe('createGeminiEmbedClient', () => {
     if (result.ok) return;
     expect(result.error.kind).toBe('other');
   });
+
+  it('parses retryAfterMs (in ms) from a real Gemini 429 response body', async () => {
+    const body = JSON.stringify({
+      error: {
+        code: 429,
+        message: 'You exceeded your current quota... Please retry in 51.711186859s.',
+        status: 'RESOURCE_EXHAUSTED',
+        details: [{ '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '51s' }],
+      },
+    });
+    const ai: GenAILike = {
+      models: {
+        async embedContent() {
+          throw new Error(body);
+        },
+      },
+    };
+    const client = createGeminiEmbedClient(ai, 'gemini-embedding-2');
+
+    const result = await client.embedBatch(['a']);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('rate-limit');
+    expect(result.error.retryAfterMs).toBe(51_000);
+  });
+
+  it('leaves retryAfterMs undefined when the rate-limit error has no parseable retryDelay', async () => {
+    const ai: GenAILike = {
+      models: {
+        async embedContent() {
+          throw new Error('429 RESOURCE_EXHAUSTED: quota, no structured detail');
+        },
+      },
+    };
+    const client = createGeminiEmbedClient(ai, 'gemini-embedding-2');
+
+    const result = await client.embedBatch(['a']);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.retryAfterMs).toBeUndefined();
+  });
 });

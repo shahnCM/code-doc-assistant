@@ -5,6 +5,8 @@ import { EMBEDDING_DIM } from './constants.js';
 export interface EmbedError {
   kind: 'rate-limit' | 'other';
   message: string;
+  /** Server-suggested wait, in ms, parsed from a 429's `retryDelay` field when present. */
+  retryAfterMs?: number;
 }
 
 export interface EmbedClient {
@@ -21,10 +23,19 @@ export interface GenAILike {
   };
 }
 
+function parseRetryAfterMs(message: string): number | undefined {
+  const match = /"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/.exec(message);
+  const seconds = match?.[1];
+  if (!seconds) return undefined;
+  return Math.ceil(Number(seconds) * 1000);
+}
+
 function classifyEmbedError(error: unknown): EmbedError {
   const message = error instanceof Error ? error.message : String(error);
   const isRateLimit = /429|RESOURCE_EXHAUSTED/i.test(message);
-  return { kind: isRateLimit ? 'rate-limit' : 'other', message };
+  if (!isRateLimit) return { kind: 'other', message };
+  const retryAfterMs = parseRetryAfterMs(message);
+  return { kind: 'rate-limit', message, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
 }
 
 export function createGeminiEmbedClient(ai: GenAILike, model: string): EmbedClient {

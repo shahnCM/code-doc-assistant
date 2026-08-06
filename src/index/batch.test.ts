@@ -83,6 +83,33 @@ describe('embedTexts', () => {
     expect(result.error.kind).toBe('rate-limit');
   });
 
+  it('honors a server-provided retryAfterMs instead of exponential backoff', async () => {
+    let attempts = 0;
+    const client: EmbedClient = {
+      async embedBatch(texts) {
+        attempts += 1;
+        if (attempts === 1) {
+          return { ok: false, error: { kind: 'rate-limit', message: 'quota', retryAfterMs: 5 } };
+        }
+        return { ok: true, value: texts.map((t) => [t.length]) };
+      },
+    };
+
+    const start = Date.now();
+    const result = await embedTexts(['a'], client, {
+      batchSize: 1,
+      concurrency: 1,
+      maxRetries: 3,
+      baseDelayMs: 100_000,
+    });
+    const elapsed = Date.now() - start;
+
+    expect(result.ok).toBe(true);
+    expect(attempts).toBe(2);
+    // baseDelayMs alone would make this take >100s; retryAfterMs being honored keeps it near-instant.
+    expect(elapsed).toBeLessThan(2000);
+  });
+
   it('preserves original text order across concurrently-processed batches', async () => {
     const client: EmbedClient = {
       async embedBatch(texts) {
