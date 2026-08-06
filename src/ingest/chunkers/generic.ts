@@ -1,4 +1,5 @@
 import type { Candidate, Chunk, ChunkError, ChunkerOutput, Result } from '../../shared/types.js';
+import { splitByLines, tagParts } from '../enrich.js';
 import { estimateTokens } from '../tokens.js';
 import type { Chunker } from './index.js';
 
@@ -157,31 +158,7 @@ function splitLargeBlock(block: RawBlock): RawBlock[] {
   if (estimateTokens(block.content) <= MAX_TOKENS) {
     return [block];
   }
-
-  const lines = block.content.split('\n');
-  const parts: RawBlock[] = [];
-  let windowLines: string[] = [];
-  let windowStart = block.startLine;
-
-  for (const line of lines) {
-    const candidateLines = [...windowLines, line];
-    if (windowLines.length > 0 && estimateTokens(candidateLines.join('\n')) > MAX_TOKENS) {
-      parts.push({
-        startLine: windowStart,
-        endLine: windowStart + windowLines.length - 1,
-        content: windowLines.join('\n'),
-      });
-      windowStart += windowLines.length;
-      windowLines = [line];
-    } else {
-      windowLines = candidateLines;
-    }
-  }
-  if (windowLines.length > 0) {
-    parts.push({ startLine: windowStart, endLine: windowStart + windowLines.length - 1, content: windowLines.join('\n') });
-  }
-
-  return parts;
+  return splitByLines(block.content, block.startLine, MAX_TOKENS);
 }
 
 function extractSymbolName(content: string): string | null {
@@ -191,23 +168,23 @@ function extractSymbolName(content: string): string | null {
   return match?.[1] ?? null;
 }
 
-function toChunk(candidate: Candidate, block: RawBlock, symbolName: string | null, partIndex: number, partTotal: number): Chunk {
+function toChunk(candidate: Candidate, part: RawBlock & { partIndex: number; partTotal: number }, symbolName: string | null): Chunk {
   return {
     filePath: candidate.filePath,
     symbolName,
     kind: 'block',
     signature: null,
     jsDoc: null,
-    startLine: block.startLine,
-    endLine: block.endLine,
+    startLine: part.startLine,
+    endLine: part.endLine,
     parentSymbol: null,
     isExported: false,
     contentHash: '',
     language: candidate.language,
     chunkerKind: 'generic',
-    partIndex,
-    partTotal,
-    content: block.content,
+    partIndex: part.partIndex,
+    partTotal: part.partTotal,
+    content: part.content,
     embedText: '',
   };
 }
@@ -221,11 +198,10 @@ function chunkSource(candidate: Candidate, source: string): Result<ChunkerOutput
     const chunks: Chunk[] = [];
     for (const block of mergedBlocks) {
       const symbolName = extractSymbolName(block.content);
-      const parts = splitLargeBlock(block);
-      const partTotal = parts.length;
-      parts.forEach((part, index) => {
-        chunks.push(toChunk(candidate, part, symbolName, index + 1, partTotal));
-      });
+      const parts = tagParts(splitLargeBlock(block));
+      for (const part of parts) {
+        chunks.push(toChunk(candidate, part, symbolName));
+      }
     }
 
     if (chunks.length === 0) {

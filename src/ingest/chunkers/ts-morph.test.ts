@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Candidate } from '../../shared/types.js';
+import { estimateTokens } from '../tokens.js';
 import { tsMorphChunker } from './ts-morph.js';
 
 function candidate(filePath: string, extension = '.ts', language = 'typescript'): Candidate {
@@ -249,5 +250,54 @@ describe('tsMorphChunker.chunk — interface, type alias, enum', () => {
     if (!result.ok) return;
 
     expect(result.value.chunks.map((c) => c.kind).sort()).toEqual(['enum', 'interface', 'type-alias']);
+  });
+});
+
+describe('tsMorphChunker.chunk — oversized function splitting', () => {
+  it('[REQ] splits an oversized function by statement block, reconstructing the original body', () => {
+    const bodyLines = Array.from({ length: 200 }, (_, i) => `  const x${i} = ${i};`);
+    const source = ['export function big(seed: number): number {', ...bodyLines, '  return seed;', '}', ''].join(
+      '\n',
+    );
+
+    const result = tsMorphChunker.chunk(candidate('big.ts'), source);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.outcome).toBe('chunked');
+    const chunks = result.value.chunks;
+    expect(chunks.length).toBeGreaterThan(1);
+
+    for (const c of chunks) {
+      expect(estimateTokens(c.content)).toBeLessThanOrEqual(512);
+      expect(c.kind).toBe('function');
+      expect(c.symbolName).toBe('big');
+      expect(c.signature).toBe('export function big(seed: number): number');
+    }
+
+    expect(chunks.map((c) => c.partIndex)).toEqual(chunks.map((_, i) => i + 1));
+    expect(chunks.every((c) => c.partTotal === chunks.length)).toBe(true);
+
+    for (let i = 0; i < chunks.length; i++) {
+      expect(chunks[i]?.startLine).toBeGreaterThanOrEqual(1);
+      expect(chunks[i]?.endLine).toBeGreaterThanOrEqual(chunks[i]?.startLine ?? 0);
+      if (i > 0) {
+        expect(chunks[i]?.startLine).toBe((chunks[i - 1]?.endLine ?? 0) + 1);
+      }
+    }
+
+    const rejoinedBody = chunks.map((c) => c.content).join('\n');
+    const originalBody = [...bodyLines, '  return seed;'].join('\n');
+    expect(rejoinedBody).toBe(originalBody);
+  });
+
+  it('keeps a small function as a single part', () => {
+    const result = tsMorphChunker.chunk(candidate('small.ts'), 'export function small(): number {\n  return 1;\n}\n');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.value.chunks.length).toBe(1);
+    expect(result.value.chunks[0]?.partIndex).toBe(1);
+    expect(result.value.chunks[0]?.partTotal).toBe(1);
   });
 });

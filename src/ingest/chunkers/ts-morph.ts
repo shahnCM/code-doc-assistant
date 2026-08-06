@@ -13,6 +13,7 @@ import {
   Project,
   type ReturnTypedNode,
   type SourceFile,
+  type Statement,
   type TypeAliasDeclaration,
   type TypeParameteredNode,
   type VariableDeclaration,
@@ -20,6 +21,7 @@ import {
   ts,
 } from 'ts-morph';
 import type { Candidate, Chunk, ChunkError, ChunkKind, ChunkerOutput, Result } from '../../shared/types.js';
+import { type LineWindow, splitByLines, tagParts } from '../enrich.js';
 import { estimateTokens } from '../tokens.js';
 import type { Chunker } from './index.js';
 
@@ -164,19 +166,85 @@ function functionSignature(fn: FunctionDeclaration): string {
   return `${modifiersPrefix(fn)}function${generator} ${name}${typeParamsSuffix(fn)}${paramsGroup(fn)}${returnTypeSuffix(fn)}`;
 }
 
-function functionChunk(candidate: Candidate, fn: FunctionDeclaration): Chunk {
-  return buildChunk({
-    candidate,
-    symbolName: fn.getName() ?? null,
-    kind: 'function',
-    signature: functionSignature(fn),
-    jsDoc: jsDocText(fn),
-    startLine: fn.getStartLineNumber(true),
-    endLine: fn.getEndLineNumber(),
-    parentSymbol: null,
-    isExported: fn.isExported(),
-    content: fn.getText(),
+function groupStatementsByBudget(sourceLines: string[], statements: readonly Statement[]): Statement[][] {
+  const groups: Statement[][] = [];
+  let current: Statement[] = [];
+  let groupStartLine = 0;
+
+  for (const statement of statements) {
+    if (current.length > 0) {
+      const candidateContent = sourceLines.slice(groupStartLine - 1, statement.getEndLineNumber()).join('\n');
+      if (estimateTokens(candidateContent) > MAX_TOKENS) {
+        groups.push(current);
+        current = [];
+      }
+    }
+    if (current.length === 0) groupStartLine = statement.getStartLineNumber();
+    current.push(statement);
+  }
+  if (current.length > 0) groups.push(current);
+
+  return groups;
+}
+
+function packStatementsByBudget(sourceLines: string[], statements: readonly Statement[]): LineWindow[] {
+  const groups = groupStatementsByBudget(sourceLines, statements);
+  const bodyEndLine = statements[statements.length - 1]?.getEndLineNumber() ?? 0;
+
+  return groups.map((group, index) => {
+    const startLine = group[0]!.getStartLineNumber();
+    const nextGroup = groups[index + 1];
+    const endLine = nextGroup ? nextGroup[0]!.getStartLineNumber() - 1 : bodyEndLine;
+    return { startLine, endLine, content: sourceLines.slice(startLine - 1, endLine).join('\n') };
   });
+}
+
+function functionChunks(candidate: Candidate, fn: FunctionDeclaration): Chunk[] {
+  const name = fn.getName() ?? null;
+  const signature = functionSignature(fn);
+  const jsDoc = jsDocText(fn);
+  const isExported = fn.isExported();
+  const content = fn.getText();
+
+  const body = fn.getBody();
+  const statements = Node.isBlock(body) ? body.getStatements() : [];
+
+  if (estimateTokens(content) <= MAX_TOKENS || statements.length === 0) {
+    return [
+      buildChunk({
+        candidate,
+        symbolName: name,
+        kind: 'function',
+        signature,
+        jsDoc,
+        startLine: fn.getStartLineNumber(true),
+        endLine: fn.getEndLineNumber(),
+        parentSymbol: null,
+        isExported,
+        content,
+      }),
+    ];
+  }
+
+  const sourceLines = fn.getSourceFile().getFullText().split('\n');
+  const windows = tagParts(packStatementsByBudget(sourceLines, statements));
+
+  return windows.map((w) =>
+    buildChunk({
+      candidate,
+      symbolName: name,
+      kind: 'function',
+      signature,
+      jsDoc,
+      startLine: w.startLine,
+      endLine: w.endLine,
+      parentSymbol: null,
+      isExported,
+      content: w.content,
+      partIndex: w.partIndex,
+      partTotal: w.partTotal,
+    }),
+  );
 }
 
 function interfaceSignature(iface: InterfaceDeclaration): string {
@@ -340,7 +408,7 @@ function collectChunks(candidate: Candidate, sourceFile: SourceFile): Chunk[] {
     if (Node.isClassDeclaration(statement)) {
       chunks.push(...classChunks(candidate, statement));
     } else if (Node.isFunctionDeclaration(statement)) {
-      chunks.push(functionChunk(candidate, statement));
+      chunks.push(...functionChunks(candidate, statement));
     } else if (Node.isInterfaceDeclaration(statement)) {
       chunks.push(interfaceChunk(candidate, statement));
     } else if (Node.isTypeAliasDeclaration(statement)) {
@@ -363,28 +431,8 @@ function collectChunks(candidate: Candidate, sourceFile: SourceFile): Chunk[] {
 }
 
 function fallbackWindowChunks(candidate: Candidate, source: string): Chunk[] {
-  const lines = source.split('\n');
-  const windows: Array<{ startLine: number; endLine: number; content: string }> = [];
-  let windowLines: string[] = [];
-  let windowStart = 1;
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? '';
-    const candidateLines = [...windowLines, line];
-    if (windowLines.length > 0 && estimateTokens(candidateLines.join('\n')) > MAX_TOKENS) {
-      windows.push({ startLine: windowStart, endLine: windowStart + windowLines.length - 1, content: windowLines.join('\n') });
-      windowStart += windowLines.length;
-      windowLines = [line];
-    } else {
-      windowLines = candidateLines;
-    }
-  }
-  if (windowLines.length > 0) {
-    windows.push({ startLine: windowStart, endLine: windowStart + windowLines.length - 1, content: windowLines.join('\n') });
-  }
-
-  const partTotal = windows.length;
-  return windows.map((w, index) =>
+  const windows = tagParts(splitByLines(source, 1, MAX_TOKENS));
+  return windows.map((w) =>
     buildChunk({
       candidate,
       symbolName: null,
@@ -397,8 +445,8 @@ function fallbackWindowChunks(candidate: Candidate, source: string): Chunk[] {
       isExported: false,
       content: w.content,
       chunkerKind: 'fallback',
-      partIndex: index + 1,
-      partTotal,
+      partIndex: w.partIndex,
+      partTotal: w.partTotal,
     }),
   );
 }
