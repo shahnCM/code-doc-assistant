@@ -26,6 +26,11 @@ describe('chunker registry', () => {
     }
   });
 
+  it('registers the generic chunker as the total fallback for .py and an unknown extension', () => {
+    expect(selectChunker(candidate('.py', 'python'), registry)?.name).toBe('generic');
+    expect(selectChunker(candidate('', 'unknown'), registry)?.name).toBe('generic');
+  });
+
   const tsLikeChunker = makeChunker('ts-like', 'ts-morph', (c) => TS_JS_EXTENSIONS.includes(c.extension));
   const genericLikeChunker = makeChunker('generic-like', 'generic', () => true);
   const chunkers: readonly Chunker[] = [tsLikeChunker, genericLikeChunker];

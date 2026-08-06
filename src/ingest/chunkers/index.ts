@@ -1,4 +1,5 @@
 import type { Candidate, ChunkError, ChunkerOutput, Result } from '../../shared/types.js';
+import { genericChunker } from './generic.js';
 import { tsMorphChunker } from './ts-morph.js';
 
 export interface Chunker {
@@ -12,4 +13,4 @@ export function selectChunker(candidate: Candidate, chunkers: readonly Chunker[]
   return chunkers.find((chunker) => chunker.supports(candidate));
 }
 
-export const registry: readonly Chunker[] = [tsMorphChunker];
+export const registry: readonly Chunker[] = [tsMorphChunker, genericChunker];
