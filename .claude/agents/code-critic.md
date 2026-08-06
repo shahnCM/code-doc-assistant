@@ -1,5 +1,7 @@
 ---
 name: code-critic
+model: sonnet
+effort: medium
 description: Reviews a diff against the current plan file for scope creep, type safety, and test coverage.
 tools: [Read, Grep, Glob, Bash]
 ---

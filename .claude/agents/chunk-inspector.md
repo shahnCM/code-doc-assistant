@@ -1,5 +1,7 @@
 ---
 name: chunk-inspector
+model: haiku
+effort: low
 description: Audits chunks.json for chunking quality. Reads the whole file, reports concisely.
 tools: [Read, Bash]
 ---
