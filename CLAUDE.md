@@ -3,14 +3,17 @@
 RAG over TypeScript codebases. AST-level chunking via ts-morph, hybrid dense + lexical
 retrieval in Postgres, answers cited back to `file:line`.
 
-> Run `/init`, then reconcile with this file — keep this version's facts where they conflict,
-> they were verified against the running environment. Delete anything that stops being true.
-> Target ~200 lines; if it grows past that, something belongs in a skill instead.
+> **Protected files — never edit these without being asked explicitly:** `CLAUDE.md`,
+> `README.md`, `BUILD-PLAN.md`, `.env`, `.mcp.json`, anything under `.claude/`. Their contents
+> were verified against the running environment or written by hand. A `PreToolUse` hook blocks
+> writes to them; if a change is genuinely needed, say so and let the human make it.
+> Target ~200 lines; if this file grows past that, something belongs in a skill instead.
 
 ## Stack
 
 TypeScript (strict, ESM) · Node 24.18.0 · Express 5 · React + Vite + Tailwind ·
-Postgres 16 + pgvector 0.8.6 · vitest · pino
+Postgres 16 + pgvector 0.8.6 · Gemini (`gemini-embedding-2` 768d, `gemini-3.6-flash`) ·
+vitest · pino
 
 ## Commands
 
@@ -37,8 +40,11 @@ project at `/projects/code-doc-assistant`). This is settled — do not offer hos
   Anything needing `docker compose` is run by the human in a host terminal.
 - Embeddings and generation both go through **Google Gemini** (`@google/genai`), read from
   `GEMINI_API_KEY` — one provider, one key, free tier. Do NOT import `openai` or
-  `@anthropic-ai/sdk`; neither is a dependency of this project. Confirm the current embedding
-  and Flash model ids in AI Studio before hardcoding one — they've moved more than once.
+  `@anthropic-ai/sdk`; neither is a dependency of this project.
+- Verified models: `gemini-embedding-2` (768 dims, auto-normalized) and `gemini-3.6-flash`.
+  Both read from `.env` (`EMBED_MODEL`, `GEN_MODEL`) — never hardcode an id. Model availability
+  differs by account age; `gemini-2.5-flash` already 404s for new keys, so a grader's list will
+  not match yours.
 - Gemini's free tier is rate-limited by RPM/RPD as well as tokens. Embedding batches can run
   concurrently (TPM headroom is large); generation calls in a loop — eval sweeps especially —
   must be paced or they 429.
@@ -55,7 +61,9 @@ src/retrieve/   dense + lexical → RRF fusion → call-graph expansion
 src/generate/   context assembly → LLM → citation parsing/validation
 src/server/     express routes, SSE streaming
 src/web/        react client (own tsconfig — browser lib, bundler resolution)
-src/shared/     types, config, logger — single source of truth for shapes
+src/shared/     types ONLY — zero runtime, imported by both server and client
+src/config.ts   env parsing (process.env, zod) — Node-only, never imported from src/web
+src/logger.ts   pino — Node-only, never imported from src/web
 ```
 
 Two paths only: **ingest** (offline, CLI) and **query** (online, API). Keep them separate;
@@ -68,8 +76,9 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 
 - ESM throughout. `module: nodenext`. Relative imports carry the `.js` extension even when
   the file on disk is `.ts` — `import { chunk } from './chunker.js'`.
-- `src/shared/` compiles under both tsconfigs, so it must stay free of DOM types *and*
-  Node-only globals. No `process`, no `document`, no `fs`.
+- `src/shared/` compiles under both tsconfigs, so it holds **types only** — no runtime code at
+  all. No `process`, no `document`, no `fs`, no imports of anything Node- or browser-specific.
+  Runtime helpers that need env or a logger go in `src/config.ts` / `src/logger.ts`.
 - No `any`. No non-null assertions. Discriminated unions over optional-field soup.
 - `noUncheckedIndexedAccess` is on. Array access returns `T | undefined`; handle it.
 - All shared shapes live in `src/shared/types.ts`. Never redeclare a shape locally, and never
@@ -109,10 +118,14 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 - Embedding dims live in one config constant, read by the migration. `outputDimensionality`
   must be sent **per request** — omit it and you silently get 3072-dim vectors and a
   `different vector dimensions` error from pgvector on insert.
-- Normalization depends on the embedding model: newer ones auto-normalize truncated dimensions,
-  `gemini-embedding-001` does not. Cosine (`<=>`) is scale-invariant so it still works either
-  way, but normalize on write anyway — it costs three lines and keeps `<#>` (inner product,
-  faster) available as a swap.
+- **`gemini-embedding-2` aggregates a list of plain strings into ONE embedding.** Passing
+  `contents: ['a','b','c']` returns 1 vector, not 3 — silently, no error. Every batch call must
+  wrap each item: `contents: texts.map(t => ({ parts: [{ text: t }] }))`. Verified: wrapped
+  returns 3, and response order matches input order.
+- Response shape is `res.embeddings[i].values`, not `res.embedding.values`.
+- `gemini-embedding-2` auto-normalizes at 768 (L2 norm measured at 1.0000), so no manual
+  normalization step. `gemini-embedding-001` would need one — another reason not to swap the
+  model id without re-checking.
 - Embedding calls burn free-tier request budget. Always check the contentHash cache first.
 - The demo corpus lives in `./tmp/` and is gitignored. Never index `node_modules`.
 - Never `docker compose down -v` — that deletes `volumes/vol-postgres-16`.
@@ -125,4 +138,5 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 - Stop when `npm test` and `npm run typecheck` are both clean.
 - Do not add a dependency without asking first. This has already been used to decline tRPC
   and Next.js — the bar is real.
-- Do not touch `README.md` — I write that myself.
+- Do not touch `README.md` — I write that myself. Same for the other protected files listed at
+  the top. The hook will stop you; treat that as the answer, not an obstacle to route around.

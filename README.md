@@ -62,7 +62,7 @@ generation; no separate OpenAI/Anthropic key needed.
 > process — and say *why* ingest is separate, because that answer is about the event loop.
 
 **Stack:** TypeScript (strict, ESM) · Node 24.18.0 · Express 5 · React + Vite + Tailwind ·
-Postgres 16 + pgvector 0.8.6 · `<embedding model>` · `<LLM>`
+Postgres 16 + pgvector 0.8.6 · Gemini `gemini-embedding-2` (768d) · `gemini-3.6-flash`
 
 > Name the pgvector version explicitly in setup — verified as 0.8.6 in development. 0.8.x has
 > HNSW, `halfvec` and iterative index scans that older builds lack; a grader on a different

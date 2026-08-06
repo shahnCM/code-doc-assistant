@@ -23,6 +23,8 @@ Confirmed by running the commands, not by reading the repo. These are facts.
 | Projects mount | `/home/<user>/dev/projects` (host) → `/projects` (container) |
 | Published port ranges | `8000-8099`, `3000-3010`, `5173-5180` |
 | Node | **24.18.0**, pinned in `.mise.toml` |
+| Embedding model | **gemini-embedding-2** — 768 dims, auto-normalized, needs Content-wrapping |
+| Generation model | **gemini-3.6-flash** — streams via `generateContentStream` |
 
 **Port picks** (all inside published ranges, so they reach `localhost` either way):
 API `8080` · Vite dev `5173`
@@ -62,8 +64,10 @@ matter every hour of this build:
 - [x] `guard.sh` + `stop-gate.sh` (exit 2 verified), `settings.json`, both subagents
 - [x] Root commit `chore: agent scaffolding, hooks, subagents`
 
-Remaining: Gemini key in `.env`, `npm i @google/genai`, `/init` + reconcile, live guard test
-from the panel. Then Block 1.
+- [x] Gemini key in `.env`; models verified by smoke test (`gemini-embedding-2`, `gemini-3.6-flash`)
+- [x] `@google/genai` installed; embedding contract confirmed (Content-wrapping, 768d, order)
+
+Remaining: `protect.sh` + hook registration, one live hook test from the panel. Then Block 1.
 
 ---
 
@@ -161,12 +165,49 @@ npm i @google/genai
 Then put a Gemini key in `.env` (free, no card — aistudio.google.com), and confirm
 `.env.example` still lists the keys with empty values.
 
-Everything else in this block is done — see the checklist above. What's left is `/init` and the
-live guard test.
+Everything else in this block is done — see the checklist above. What's left is the protect
+hook and the live hook test.
 
-Run `/init` and **rewrite what it produces** — the generated draft is generic, and generic
-is exactly what you don't want. Where `/init` disagrees with the CLAUDE.md shipped alongside
-this plan, the shipped one wins: its facts were verified against the running environment.
+**Skip `/init`.** It exists to scan an existing codebase and describe what it finds. `src/` is
+empty apart from a types stub, so it has nothing to read — it would generate boilerplate and
+overwrite a CLAUDE.md whose every fact was verified by running commands. There is no upside
+here. Run it later only if you want a second opinion once real code exists, and diff it rather
+than accepting it.
+
+Instead, make the settled files structurally unwritable. `.claude/protect.sh`:
+
+```bash
+#!/usr/bin/env bash
+path=$(jq -r '.tool_input.file_path // .tool_input.path // ""')
+[ -z "$path" ] && exit 0
+case "$(basename "$path")" in
+  CLAUDE.md|README.md|BUILD-PLAN.md|.env|.mcp.json|settings.json|guard.sh|stop-gate.sh|protect.sh)
+    echo "protect.sh: $(basename "$path") is settled. Ask before changing it." >&2
+    exit 2 ;;
+esac
+```
+
+Register it as a second `PreToolUse` entry alongside the Bash guard:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/guard.sh" }] },
+      { "matcher": "Edit|Write",
+        "hooks": [{ "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/protect.sh" }] }
+    ],
+    "Stop": [{ "hooks": [{ "type": "command",
+      "command": "$CLAUDE_PROJECT_DIR/.claude/stop-gate.sh" }] }]
+  }
+}
+```
+
+Hooks only intercept Claude's tools — you editing these files in VS Code is unaffected, and
+`git checkout -- <file>` remains the backstop for anything that slips through. One trade-off:
+the `#` memory shortcut writes to CLAUDE.md, so it may now be blocked. If you want it back,
+drop `CLAUDE.md` from the case list and rely on the diff review instead.
 
 ### Subagents — `.claude/agents/`
 
@@ -182,7 +223,8 @@ You are a senior TypeScript reviewer. For the current diff check:
 2. Types — any `any`, unchecked index access, or unsafe cast.
 3. Tests — does each plan TEST case have a real assertion, not a smoke test.
 4. Errors — any silently swallowed catch.
-5. Imports — any relative import missing its `.js` extension; any DOM or Node global in src/shared.
+5. Imports — any relative import missing its `.js` extension; any runtime code at all in
+   src/shared (types only); any src/web import of src/config.ts or src/logger.ts.
 Return a markdown table: File | Issue | Severity | Fix. If clean, return "APPROVED".
 ```
 
@@ -364,15 +406,17 @@ Requirements:
 - Migration-based schema, not raw SQL at boot. node-pg-migrate.
 - Migration 001 runs CREATE EXTENSION IF NOT EXISTS vector — the dev database already has it,
   a grader's fresh container does not.
-- Embedding via @google/genai's embedContent. Set outputDimensionality explicitly to 768 on
-  every request — omitting it silently yields 3072-dim vectors that pgvector rejects on insert.
-  Put 768 in one config constant that the migration reads. Confirm the current embedding model
-  id in AI Studio rather than assuming one.
-- L2-normalize each vector before storing. Some embedding models auto-normalize truncated
-  dimensions and some do not; normalizing on write makes storage model-independent.
-- If batching many texts in one call, do not assume the response preserves input order —
-  map results back by index explicitly. Silent misalignment here poisons every retrieval and
-  is nearly invisible in testing.
+- Embedding via @google/genai's embedContent, model from EMBED_MODEL in .env
+  (verified: gemini-embedding-2). Set outputDimensionality to 768 on every request — omitting
+  it silently yields 3072-dim vectors that pgvector rejects on insert. Put 768 in one config
+  constant that the migration reads.
+- CRITICAL, verified by smoke test: this model AGGREGATES a list of plain strings into one
+  embedding. contents: ['a','b','c'] returns 1 vector, not 3, with no error. Every call must
+  wrap each text: contents: texts.map(t => ({ parts: [{ text: t }] })). Read results from
+  res.embeddings[i].values. Response order matches input order.
+- No manual L2 normalization — gemini-embedding-2 auto-normalizes truncated dimensions
+  (measured norm 1.0000 at 768). Do not add a normalize step; it would be a no-op that implies
+  a misunderstanding.
 - chunks table: embedding vector(768), tsv tsvector generated from
   symbol_name || signature || content, content_hash unique.
 - HNSW index on embedding (vector_cosine_ops), GIN on tsv.
