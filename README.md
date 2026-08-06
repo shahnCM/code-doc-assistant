@@ -29,7 +29,7 @@
 ```bash
 git clone <repo>
 cd <repo>
-cp .env.example .env      # set OPENAI_API_KEY / ANTHROPIC_API_KEY
+cp .env.example .env      # set GEMINI_API_KEY
 npm ci
 docker compose up -d
 npm run migrate           # schema is migration-based, not created at boot
@@ -42,7 +42,8 @@ open http://localhost:8080
 > setup section. State required keys and roughly how long ingestion takes on the demo repo.
 
 **Requires:** Node 24.18.0 (`.nvmrc` / `.mise.toml` pin the exact version) · Docker Compose ·
-one embedding key and one LLM key.
+one Gemini API key — free, no credit card, from aistudio.google.com. Covers both embedding and
+generation; no separate OpenAI/Anthropic key needed.
 
 ---
 
@@ -115,6 +116,13 @@ Postgres 16 + pgvector 0.8.6 · `<embedding model>` · `<LLM>`
 > NOTES (raw material, rewrite): pipeline is four controllable steps; a framework owns prompt
 > assembly and context truncation, which are exactly the parts under evaluation here; every
 > stage would gain a layer between you and the trace output you're shipping in the UI.
+>
+> NOTES on provider choice (raw material, rewrite): Gemini for both embedding and generation —
+> one key, no card, free tier covers this workload comfortably (Flash for generation, large
+> token headroom on the embedding endpoint). The real trade-off is RPM/RPD rate limits, not
+> quality — name that honestly rather than glossing over it, and say what mitigates it (batch
+> pacing, contentHash caching). The client sits behind one interface, so this is a runtime
+> config choice, not a rewrite, if a grader wants to see a paid-tier swap.
 
 ---
 
@@ -134,6 +142,10 @@ Postgres 16 + pgvector 0.8.6 · `<embedding model>` · `<LLM>`
 > How do you detect low-confidence retrieval? Any injection risk from indexed code or comments,
 > and what did you do about it? What did you deliberately leave unguarded, and why that's
 > acceptable for a prototype?
+>
+> NOTES: the free-tier provider may use submitted content to improve its models. Fine for a
+> public, permissively-licensed demo corpus — worth one honest sentence here, and worth naming
+> as a real constraint on pointing this at anyone's private code as-is.
 
 ---
 
@@ -209,6 +221,10 @@ Postgres 16 + pgvector 0.8.6 · `<embedding model>` · `<LLM>`
 >
 > NOTES: ingestion is CLI-only — a reviewer opening the UI can only query the corpus you shipped.
 > Say so plainly and point at the one-command re-index rather than letting them discover it.
+>
+> NOTES: cancellation is best-effort on both paths — the LLM signal is client-side only (the
+> service keeps generating and still bills), and node-postgres ignores AbortSignal entirely.
+> Naming both, with `pg_cancel_backend` as the real fix, is stronger than claiming a clean stop.
 
 ---
 

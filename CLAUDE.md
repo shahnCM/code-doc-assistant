@@ -35,6 +35,13 @@ project at `/projects/code-doc-assistant`). This is settled — do not offer hos
   `.env`; never hardcode a host or port.
 - There is no docker CLI in this container. Use `psql -h postgres-16 -U admin` directly.
   Anything needing `docker compose` is run by the human in a host terminal.
+- Embeddings and generation both go through **Google Gemini** (`@google/genai`), read from
+  `GEMINI_API_KEY` — one provider, one key, free tier. Do NOT import `openai` or
+  `@anthropic-ai/sdk`; neither is a dependency of this project. Confirm the current embedding
+  and Flash model ids in AI Studio before hardcoding one — they've moved more than once.
+- Gemini's free tier is rate-limited by RPM/RPD as well as tokens. Embedding batches can run
+  concurrently (TPM headroom is large); generation calls in a loop — eval sweeps especially —
+  must be paced or they 429.
 - Ports 8000-8099, 3000-3010 and 5173-5180 are published to the host. Servers must bind
   `0.0.0.0`, not localhost, or the published port never reaches the browser.
 - pgvector 0.8.6 confirmed in the dev database (`SELECT extversion FROM pg_extension`).
@@ -81,6 +88,15 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 - Cancellation: `res.on('close')` fires on success too. Only abort when `!res.writableFinished`.
 - `AbortError` is a normal outcome, not a 500. Classify it before the error handler sees it.
 - `node-postgres` ignores `AbortSignal`. Check `signal.aborted` before issuing a query.
+- `@google/genai` is NOT the old `@google/generative-ai`. There is no `getGenerativeModel()` and
+  no `model.generateContent()`. It is always `const ai = new GoogleGenAI({})` then
+  `ai.models.generateContent(...)` / `ai.models.generateContentStream(...)`, with settings in
+  `config: {}`, not a separate `generationConfig`. Training data is full of the old shape —
+  if you find yourself writing `getGenerativeModel`, stop and check the docs.
+- `new GoogleGenAI({})` picks up `GEMINI_API_KEY` from the environment automatically in Node.
+- Gemini's `abortSignal` is **client-side only**. Aborting stops us reading the stream; the
+  service keeps generating and still bills the tokens. Same shape as the `node-postgres`
+  limitation above — say so in the trace and the README rather than implying a true cancel.
 - Never `res.json()` a large payload — `JSON.stringify` is synchronous and blocks the loop.
   Trace data goes down the SSE stream.
 - ts-morph parsing is synchronous CPU work. It belongs in the ingest CLI, never in a request
@@ -90,8 +106,14 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 - ts-morph: use `getStructure()` for signatures, not `getText()` — the latter drags in trivia.
 - Migration 001 must `CREATE EXTENSION IF NOT EXISTS vector`. The dev database already has it;
   a grader's fresh container does not.
-- Embedding dims live in one config constant, read by the migration. Never hardcode 1536.
-- Embeddings cost money. Always check the contentHash cache before calling the API.
+- Embedding dims live in one config constant, read by the migration. `outputDimensionality`
+  must be sent **per request** — omit it and you silently get 3072-dim vectors and a
+  `different vector dimensions` error from pgvector on insert.
+- Normalization depends on the embedding model: newer ones auto-normalize truncated dimensions,
+  `gemini-embedding-001` does not. Cosine (`<=>`) is scale-invariant so it still works either
+  way, but normalize on write anyway — it costs three lines and keeps `<#>` (inner product,
+  faster) available as a swap.
+- Embedding calls burn free-tier request budget. Always check the contentHash cache first.
 - The demo corpus lives in `./tmp/` and is gitignored. Never index `node_modules`.
 - Never `docker compose down -v` — that deletes `volumes/vol-postgres-16`.
 

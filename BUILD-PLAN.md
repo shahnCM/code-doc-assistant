@@ -55,9 +55,15 @@ matter every hour of this build:
 - [x] `postgres-16` up; projects mount verified via `docker inspect`
 - [x] `codedocs` created, empty (`\dt` → no relations), `vector` 0.8.6 confirmed
 - [x] `.mise.toml` pinning node 24.18.0; `which node` → `installs/node/24.18.0`
-- [x] `git init`, `npm init`, `type: module`, dev dependencies, npm scripts
+- [x] `git init` on `main`, `npm init`, `type: module`, dev dependencies, npm scripts
+- [x] esbuild postinstall approved and verified against a real TS transform
+- [x] Split tsconfigs, `src/shared/types.ts` stub, `npm run typecheck` clean
+- [x] `.env.example`, `.gitignore`, `.mcp.json`
+- [x] `guard.sh` + `stop-gate.sh` (exit 2 verified), `settings.json`, both subagents
+- [x] Root commit `chore: agent scaffolding, hooks, subagents`
 
-Resume at Block 0 → *Remaining setup*.
+Remaining: Gemini key in `.env`, `npm i @google/genai`, `/init` + reconcile, live guard test
+from the panel. Then Block 1.
 
 ---
 
@@ -102,6 +108,12 @@ Terse notes. Rewrite these in your own words; do not paste them.
 - **MCP is not in the request path.** A subprocess and a protocol hop replacing a function
   call your own backend already owns. See the optional stretch block for the version that
   is actually interesting.
+- **Google Gemini for both embedding and generation, not OpenAI/Anthropic.** One provider, one
+  key, no card, and the free tier is genuinely sufficient for this workload — Flash for
+  generation, the embedding endpoint has token headroom far past what one repo needs. The real
+  cost is rate limits (RPM/RPD, not just tokens), not quality — named honestly rather than
+  hidden, and mitigated by pacing eval sweeps and caching by contentHash. The client is
+  isolated behind one interface, so swapping to a paid provider later is a config change.
 
 ## Routing table — pick the brain before you type
 
@@ -143,31 +155,16 @@ The highest-leverage 75 minutes of the day. You're building the machine that bui
 
 ```bash
 cd /projects/code-doc-assistant
-git branch -m main
-npm approve-scripts --allow-scripts-pending   # esbuild postinstall — vitest needs it
-npx vitest run --passWithNoTests              # must exit 0 before the Stop hook depends on it
+npm i @google/genai
 ```
 
-Then the tsconfig split. Root config covers server + shared and **excludes** `src/web`;
-the client extends it with DOM lib, `jsx: react-jsx` and bundler resolution. Both run under
-one script:
+Then put a Gemini key in `.env` (free, no card — aistudio.google.com), and confirm
+`.env.example` still lists the keys with empty values.
 
-```bash
-npm pkg set scripts.typecheck="tsc --noEmit && tsc --noEmit -p src/web/tsconfig.json"
-```
+Everything else in this block is done — see the checklist above. What's left is `/init` and the
+live guard test.
 
-Root config non-negotiables: `strict`, `module: nodenext`, `moduleResolution: nodenext`,
-`noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`, `verbatimModuleSyntax`.
-`nodenext` means relative imports carry `.js` extensions — put that in CLAUDE.md before Claude
-writes a line, because retrofitting extensions across thirty files at hour eight is miserable.
-
-Stub the shared types file now, since Block 1 `@`-references it:
-
-```bash
-echo 'export {};' > src/shared/types.ts
-```
-
-Then run `/init` and **rewrite what it produces** — the generated draft is generic, and generic
+Run `/init` and **rewrite what it produces** — the generated draft is generic, and generic
 is exactly what you don't want. Where `/init` disagrees with the CLAUDE.md shipped alongside
 this plan, the shipped one wins: its facts were verified against the running environment.
 
@@ -361,23 +358,32 @@ while the contrast is in front of you.
 plan: embedding pipeline and pgvector storage.
 
 Read @plans/01-chunking.md, @src/shared/types.ts, and @CLAUDE.md.
-Target: Postgres 16, pgvector 0.8.6, DATABASE_URL from .env.
+Target: Postgres 16, pgvector 0.8.6, DATABASE_URL and GEMINI_API_KEY from .env.
 
 Requirements:
 - Migration-based schema, not raw SQL at boot. node-pg-migrate.
 - Migration 001 runs CREATE EXTENSION IF NOT EXISTS vector — the dev database already has it,
   a grader's fresh container does not.
-- Embedding model: text-embedding-3-small at 1536 dims. Put the dimension in one config
-  constant that the migration reads — changing model later must not mean hunting literals.
-- chunks table: embedding vector(1536), tsv tsvector generated from
+- Embedding via @google/genai's embedContent. Set outputDimensionality explicitly to 768 on
+  every request — omitting it silently yields 3072-dim vectors that pgvector rejects on insert.
+  Put 768 in one config constant that the migration reads. Confirm the current embedding model
+  id in AI Studio rather than assuming one.
+- L2-normalize each vector before storing. Some embedding models auto-normalize truncated
+  dimensions and some do not; normalizing on write makes storage model-independent.
+- If batching many texts in one call, do not assume the response preserves input order —
+  map results back by index explicitly. Silent misalignment here poisons every retrieval and
+  is nearly invisible in testing.
+- chunks table: embedding vector(768), tsv tsvector generated from
   symbol_name || signature || content, content_hash unique.
 - HNSW index on embedding (vector_cosine_ops), GIN on tsv.
-- Disk cache keyed by content_hash — re-ingest during development must not re-embed.
-- Batch with concurrency 5, exponential backoff on 429.
+- Disk cache keyed by content_hash — re-ingest during development must not re-embed, and must
+  not burn free-tier request budget.
+- Batch with concurrency 5, exponential backoff on 429. Embedding TPM headroom is large on the
+  free tier, so concurrency is the safe knob here — this is not where RPM bites.
 
-TESTS: cache hit skips the API call (mock the embedding client — never hit a paid API from the
-suite); batching respects the concurrency cap; a failed batch retries without corrupting the
-run; migration is idempotent.
+TESTS: cache hit skips the API call (mock the embedding client — never hit the real API from
+the suite, free tier or not); batching respects the concurrency cap; a failed batch retries
+without corrupting the run; migration is idempotent.
 
 Write plans/02-embedding.md. STOP WHEN it exists.
 ```
@@ -446,12 +452,20 @@ Requirements:
   * res.flushHeaders(), and set `X-Accel-Buffering: no`
   * heartbeat comment every 15s
   * raise server.requestTimeout and server.headersTimeout above the stream lifetime
+- LLM client: @google/genai's generateContentStream — an async generator yielding
+  GenerateContentResponse chunks with a `.text` accessor. This is NOT OpenAI-shaped
+  (`choices[0].delta.content`) or Anthropic-shaped (`content_block_delta` events) — wrap it in
+  a small adapter so the SSE layer emits our own event shape, not the SDK's.
 - Cancellation via AbortController — one controller per request, signal threaded into the
   embedding fetch, the DB call, and the LLM request:
   * abort on `res.on('close')` ONLY when `!res.writableFinished` — close fires on success too
   * combine with a deadline: AbortSignal.any([ctrl.signal, AbortSignal.timeout(30_000)])
   * node-postgres does not accept AbortSignal — check signal.aborted before issuing the query,
     and note pg_cancel_backend(pid) as the real fix under future work
+  * Gemini takes the signal as config.abortSignal, but it is CLIENT-SIDE ONLY — it stops us
+    reading the stream; the service keeps generating and still bills. Both cancellation paths
+    in this app are therefore best-effort. Say so in the trace event and the README rather than
+    claiming a true cancel.
   * AbortError must be caught and classified separately from genuine errors — it is a normal
     outcome, not a 500
   * emit a trace event on cancellation with elapsed time and estimated tokens not generated
@@ -556,13 +570,16 @@ Each category tunes k, dense/lexical weight, and expansion depth.
 
 evals/golden.json: 15 questions with expected source files, five per category.
 npm run eval prints hit@5, hit@10, MRR as a markdown table.
+Space generation calls in the runner — a short delay between questions, not a tight loop —
+free-tier RPM is the binding constraint here, not TPM, and 15 questions run back-to-back can
+trip it.
 
 TESTS: classifier tested against 15 labelled inputs; eval runner deterministic on a fixture.
 STOP WHEN npm run eval produces a table.
 ```
 
-Then run it twice — dense-only against hybrid — and keep both rows. A configuration that scored
-*worse* is the most persuasive thing you can put in a README.
+Then run it twice — dense-only against hybrid — and keep both rows, spaced the same way. A
+configuration that scored *worse* is the most persuasive thing you can put in a README.
 
 ---
 
