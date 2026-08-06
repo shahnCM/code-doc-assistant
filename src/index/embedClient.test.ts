@@ -132,4 +132,78 @@ describe('createGeminiEmbedClient', () => {
     if (result.ok) return;
     expect(result.error.retryAfterMs).toBeUndefined();
   });
+
+  it("[REQ] classifies a daily-quota-exhausted error distinctly from a per-minute 429, so it won't be retried into a wall that won't clear for hours", async () => {
+    const dailyQuotaBody = JSON.stringify({
+      error: {
+        code: 429,
+        message: 'You exceeded your current quota... Please retry in 59.698796327s.',
+        status: 'RESOURCE_EXHAUSTED',
+        details: [
+          {
+            '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+            violations: [
+              {
+                quotaMetric: 'generativelanguage.googleapis.com/embed_content_free_tier_requests',
+                quotaId: 'EmbedContentRequestsPerDayPerProjectPerModel-FreeTier',
+                quotaDimensions: { model: 'gemini-embedding-2', location: 'global' },
+              },
+            ],
+          },
+          { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '59s' },
+        ],
+      },
+    });
+    const ai: GenAILike = {
+      models: {
+        async embedContent() {
+          throw new Error(dailyQuotaBody);
+        },
+      },
+    };
+    const client = createGeminiEmbedClient(ai, 'gemini-embedding-2');
+
+    const result = await client.embedBatch(['a']);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('daily-quota');
+  });
+
+  it('still classifies a per-minute 429 as rate-limit, not daily-quota', async () => {
+    const perMinuteBody = JSON.stringify({
+      error: {
+        code: 429,
+        message: 'You exceeded your current quota... Please retry in 21.575377394s.',
+        status: 'RESOURCE_EXHAUSTED',
+        details: [
+          {
+            '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+            violations: [
+              {
+                quotaMetric: 'generativelanguage.googleapis.com/embed_content_free_tier_requests',
+                quotaId: 'EmbedContentRequestsPerMinutePerProjectPerModel-FreeTier',
+                quotaDimensions: { model: 'gemini-embedding-2', location: 'global' },
+              },
+            ],
+          },
+          { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '21s' },
+        ],
+      },
+    });
+    const ai: GenAILike = {
+      models: {
+        async embedContent() {
+          throw new Error(perMinuteBody);
+        },
+      },
+    };
+    const client = createGeminiEmbedClient(ai, 'gemini-embedding-2');
+
+    const result = await client.embedBatch(['a']);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('rate-limit');
+  });
 });

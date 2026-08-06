@@ -73,6 +73,23 @@ describe('embedTexts', () => {
     expect(calls).toBe(1);
   });
 
+  it('[REQ] a daily-quota error fails fast after one attempt, not maxRetries attempts', async () => {
+    let calls = 0;
+    const client: EmbedClient = {
+      async embedBatch() {
+        calls += 1;
+        return { ok: false, error: { kind: 'daily-quota', message: 'daily quota exhausted' } };
+      },
+    };
+
+    const result = await embedTexts(['a'], client, { batchSize: 1, concurrency: 1, maxRetries: 5, baseDelayMs: 1 });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('daily-quota');
+    expect(calls).toBe(1);
+  });
+
   it('exhausting retries on a persistent rate-limit error still fails, not looping forever', async () => {
     const { client } = fakeEmbedClientWithFailures('a', Number.POSITIVE_INFINITY);
 

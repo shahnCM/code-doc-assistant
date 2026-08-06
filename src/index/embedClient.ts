@@ -3,7 +3,11 @@ import type { Result } from '../shared/types.js';
 import { EMBEDDING_DIM } from './constants.js';
 
 export interface EmbedError {
-  kind: 'rate-limit' | 'other';
+  /**
+   * 'rate-limit' (per-minute) is worth retrying — the window clears within seconds.
+   * 'daily-quota' won't clear for hours; retrying it is a wasted wait, not a transient blip.
+   */
+  kind: 'rate-limit' | 'daily-quota' | 'other';
   message: string;
   /** Server-suggested wait, in ms, parsed from a 429's `retryDelay` field when present. */
   retryAfterMs?: number;
@@ -32,8 +36,16 @@ function parseRetryAfterMs(message: string): number | undefined {
 
 function classifyEmbedError(error: unknown): EmbedError {
   const message = error instanceof Error ? error.message : String(error);
-  const isRateLimit = /429|RESOURCE_EXHAUSTED/i.test(message);
-  if (!isRateLimit) return { kind: 'other', message };
+  const isResourceExhausted = /429|RESOURCE_EXHAUSTED/i.test(message);
+  if (!isResourceExhausted) return { kind: 'other', message };
+
+  // Gemini's quotaId distinguishes the exhausted window (e.g. "...PerDay..." vs
+  // "...PerMinute..."); a daily cap won't clear for hours, so it must not be retried
+  // the same way a per-minute cap is.
+  if (/PerDay/i.test(message)) {
+    return { kind: 'daily-quota', message };
+  }
+
   const retryAfterMs = parseRetryAfterMs(message);
   return { kind: 'rate-limit', message, ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) };
 }
