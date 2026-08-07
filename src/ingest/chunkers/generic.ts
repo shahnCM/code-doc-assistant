@@ -1,6 +1,6 @@
 import type { Candidate, Chunk, ChunkError, ChunkerOutput, Result } from '../../shared/types.js';
 import { splitByLines, tagParts } from '../enrich.js';
-import { estimateTokens } from '../tokens.js';
+import { estimateTokens } from '../../tokens.js';
 import type { Chunker } from './index.js';
 
 const MAX_TOKENS = 512;

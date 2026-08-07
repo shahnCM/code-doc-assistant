@@ -1,6 +1,6 @@
 import type { Chunk } from '../shared/types.js';
 import { contentHash } from './hash.js';
-import { estimateTokens } from './tokens.js';
+import { estimateTokens } from '../tokens.js';
 
 export interface LineWindow {
   startLine: number;

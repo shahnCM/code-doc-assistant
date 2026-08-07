@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Candidate } from '../../shared/types.js';
-import { estimateTokens } from '../tokens.js';
+import { estimateTokens } from '../../tokens.js';
 import { genericChunker } from './generic.js';
 
 function candidate(filePath: string, extension: string, language: string): Candidate {

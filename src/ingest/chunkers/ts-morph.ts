@@ -24,7 +24,7 @@ import {
 } from 'ts-morph';
 import type { Candidate, Chunk, ChunkError, ChunkKind, ChunkerOutput, Result } from '../../shared/types.js';
 import { type LineWindow, splitByLines, tagParts } from '../enrich.js';
-import { estimateTokens } from '../tokens.js';
+import { estimateTokens } from '../../tokens.js';
 import type { Chunker } from './index.js';
 
 const MAX_TOKENS = 512;

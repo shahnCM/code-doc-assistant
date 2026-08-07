@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Candidate } from '../../shared/types.js';
-import { estimateTokens } from '../tokens.js';
+import { estimateTokens } from '../../tokens.js';
 import { tsMorphChunker } from './ts-morph.js';
 
 function candidate(filePath: string, extension = '.ts', language = 'typescript'): Candidate {
