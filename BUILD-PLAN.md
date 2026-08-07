@@ -808,14 +808,50 @@ different version shouldn't quietly get worse retrieval than you measured.
 The README is the artifact you're accountable for — Claude generates the first full draft from
 material that's already written down (`NOTES.md`, `plans/` files, the decisions list at the top
 of this document, and your eval table), and you audit every claim before it ships. Nothing in
-the draft gets accepted on trust.
+the draft gets accepted on trust. Screenshots are also Claude-generated this round — it can
+drive the running app through Playwright/Chromium from inside the container — but they get the
+same audit treatment as every other claim: you look at each one before it ships.
+
+### SCREENSHOTS — Claude drives the browser, in-container
+
+Prereq: the app must actually be running and reachable (`docker compose up`, or your dev
+server, with at least one corpus already ingested — use the hono demo). Confirm before you
+start:
+
+```bash
+curl -sf localhost:8080/ready
+```
+
+Then, in the same session (Claude has Playwright/Chromium available in this container):
+
+```
+Using Playwright, open localhost:8080 (or the Vite dev URL if that's what's running) and
+capture three screenshots into ./screenshots/:
+
+1. chat-with-citations.png — ask a question the indexed repo can genuinely answer (pick one
+   from evals/golden.json), wait for the streamed answer to finish, and capture the chat pane
+   showing the answer with visible citation chips.
+2. source-viewer.png — click one citation chip and capture the source pane open with the
+   cited file:line range visible/highlighted.
+3. trace-panel.png — expand the trace panel and capture it showing retrieved chunks with
+   dense/lexical/fused scores and the language/chunkerKind badges.
+
+Use a 1440x900 viewport. Wait for network idle / streaming completion before each capture —
+no partial/loading-state screenshots. Save all three to ./screenshots/ and list the files
+you produced when done. Do not embed them in README.md yet.
+```
+
+Check the three files land in `./screenshots/` and actually look right — a bad selector or a
+capture mid-stream is the likely failure mode here, not a wrong claim. Re-run individual
+captures if any look off before moving on.
 
 ### GENERATE — Sonnet, plenty of context
 
 ```
 Read @README.md (the scaffold — every `> PROMPT:` line is a question to answer, every
 `> NOTES:` block is raw material to rewrite in your own words, never paste verbatim),
-@NOTES.md, @plans/*.md, and the decisions list and eval table in @BUILD-PLAN.md.
+@NOTES.md, @plans/*.md, the decisions list and eval table in @BUILD-PLAN.md, and the three
+files in @screenshots/.
 
 Write a complete README.md replacing every PROMPT/NOTES block with real prose answering
 that section, grounded only in what plans/*.md and NOTES.md actually record. Do not invent
@@ -824,9 +860,16 @@ an explicit placeholder instead:
 
   <FILL: description>
 
-for anything you cannot source from the repo (screenshots, eval numbers not yet run, demo
-corpus names/SHAs not yet recorded). Use this exact placeholder format so they're
-grep-able: `<FILL: ...>` for missing facts, `<SCREENSHOT: description>` for images.
+for anything you cannot source from the repo (eval numbers not yet run, demo corpus
+names/SHAs not yet recorded). Use this exact placeholder format so it's grep-able:
+`<FILL: ...>` for missing facts.
+
+Embed the three screenshots from ./screenshots/ using real relative markdown image syntax
+(`![...](./screenshots/chat-with-citations.png)` etc.) at the points in the README where the
+scaffold's `Screenshots` checklist and any PROMPT lines call for them — do not leave
+`<SCREENSHOT: ...>` placeholders for these three, they already exist. If a section of the
+scaffold calls for a screenshot you were not asked to capture (e.g. a non-TS-corpus answer),
+leave `<SCREENSHOT: description>` for that one only.
 
 State the language tiering plainly in the first paragraph — optimised for TS/JS, generic
 structural chunking elsewhere. Claim exactly what was built, no more.
@@ -837,17 +880,21 @@ softening of named shortcuts (no auth, no retries, thin UI coverage, archived MC
 STOP WHEN README.md is fully written with no PROMPT/NOTES scaffold text remaining.
 ```
 
-### AUDIT — you, not Claude
+### AUDIT — by claude
 
 Go through the generated README section by section against the actual repo:
 
-- [ ] Every `<FILL: ...>` and `<SCREENSHOT: ...>` placeholder — fill or capture, don't leave any in
+- [ ] Open each embedded screenshot and check it actually shows what its caption/section
+      claims — Claude captured these itself, so verify rather than trust: right question
+      asked, citations actually visible, trace panel actually expanded, no loading spinners
+      or empty states caught mid-stream
+- [ ] Every remaining `<FILL: ...>` and `<SCREENSHOT: ...>` placeholder — fill or capture, don't leave any in
 - [ ] Every claim about architecture, decisions, and gotchas — checked against `plans/*.md` and code
 - [ ] Eval numbers match `npm run eval` output exactly, not paraphrased
 - [ ] Reject/rewrite anything that reads templated or overclaims — this is the one artifact
       graders will read as your own thinking, so restore your voice where it's missing
 
-### FACT-CHECK — final pass, after your edits
+### FACT-CHECK — final pass after user's confirmation 
 
 ```
 Read @README.md and the repo. List only statements in the README that the code does not
@@ -856,10 +903,12 @@ actually do. No style edits, no rewrites, no suggestions.
 
 Fix whatever comes back. Re-run this once after fixes — don't assume the second pass is clean.
 
-- [ ] Screenshots: chat with citations, source viewer, trace panel
+- [ ] Screenshots: chat with citations, source viewer, trace panel — all three embedded, all
+      three verified against the running app, not just present
 - [ ] Commit the `plans/` files — evidence of how you work
 - [ ] Commit `CLAUDE.md`, `.claude/agents/`, `.claude/settings.json`, `.mcp.json` — these *are*
       your answer to "how do you make AI-assisted development repeatable and maintainable"
+- [ ] Commit `./screenshots/` alongside README.md — relative image paths break otherwise
 - [ ] Confirm every brief bullet has a section: setup, architecture, productionising,
       RAG/LLM decisions **including orchestration framework**, key technical decisions,
       engineering standards *and* the ones skipped, AI tool usage, what you'd do differently
