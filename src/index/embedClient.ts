@@ -6,15 +6,16 @@ export interface EmbedError {
   /**
    * 'rate-limit' (per-minute) is worth retrying — the window clears within seconds.
    * 'daily-quota' won't clear for hours; retrying it is a wasted wait, not a transient blip.
+   * 'aborted' is a normal outcome (a caller-cancelled request), not a service failure.
    */
-  kind: 'rate-limit' | 'daily-quota' | 'other';
+  kind: 'rate-limit' | 'daily-quota' | 'aborted' | 'other';
   message: string;
   /** Server-suggested wait, in ms, parsed from a 429's `retryDelay` field when present. */
   retryAfterMs?: number;
 }
 
 export interface EmbedClient {
-  embedBatch(texts: readonly string[]): Promise<Result<number[][], EmbedError>>;
+  embedBatch(texts: readonly string[], signal?: AbortSignal): Promise<Result<number[][], EmbedError>>;
 }
 
 export interface GenAILike {
@@ -22,7 +23,7 @@ export interface GenAILike {
     embedContent(args: {
       model: string;
       contents: Array<{ parts: Array<{ text: string }> }>;
-      config: { outputDimensionality: number };
+      config: { outputDimensionality: number; abortSignal?: AbortSignal };
     }): Promise<{ embeddings?: Array<{ values?: number[] }> }>;
   };
 }
@@ -35,6 +36,10 @@ function parseRetryAfterMs(message: string): number | undefined {
 }
 
 function classifyEmbedError(error: unknown): EmbedError {
+  if (error instanceof Error && error.name === 'AbortError') {
+    return { kind: 'aborted', message: error.message };
+  }
+
   const message = error instanceof Error ? error.message : String(error);
   const isResourceExhausted = /429|RESOURCE_EXHAUSTED/i.test(message);
   if (!isResourceExhausted) return { kind: 'other', message };
@@ -52,12 +57,15 @@ function classifyEmbedError(error: unknown): EmbedError {
 
 export function createGeminiEmbedClient(ai: GenAILike, model: string): EmbedClient {
   return {
-    async embedBatch(texts) {
+    async embedBatch(texts, signal) {
       try {
         const res = await ai.models.embedContent({
           model,
           contents: texts.map((text) => ({ parts: [{ text }] })),
-          config: { outputDimensionality: EMBEDDING_DIM },
+          config: {
+            outputDimensionality: EMBEDDING_DIM,
+            ...(signal !== undefined ? { abortSignal: signal } : {}),
+          },
         });
         const embeddings = res.embeddings;
         if (!embeddings) {

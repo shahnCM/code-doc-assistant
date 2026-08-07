@@ -5,7 +5,7 @@ import { createGeminiEmbedClient, type GenAILike } from './embedClient.js';
 interface CapturedCall {
   model: string;
   contents: Array<{ parts: Array<{ text: string }> }>;
-  config: { outputDimensionality: number };
+  config: { outputDimensionality: number; abortSignal?: AbortSignal };
 }
 
 function fakeGenAI(
@@ -205,5 +205,35 @@ describe('createGeminiEmbedClient', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.error.kind).toBe('rate-limit');
+  });
+
+  it('passes an abortSignal through to config.abortSignal when one is given, and omits the key otherwise', async () => {
+    const { ai, calls } = fakeGenAI(() => ({ embeddings: [{ values: [0] }] }));
+    const client = createGeminiEmbedClient(ai, 'gemini-embedding-2');
+    const controller = new AbortController();
+
+    await client.embedBatch(['a'], controller.signal);
+    await client.embedBatch(['b']);
+
+    expect(calls[0]?.config).toEqual({ outputDimensionality: EMBEDDING_DIM, abortSignal: controller.signal });
+    expect(calls[1]?.config).toEqual({ outputDimensionality: EMBEDDING_DIM });
+  });
+
+  it('[REQ] classifies an AbortError as kind aborted, never other — keyed on error.name, since instanceof Error is true for both', async () => {
+    const abortError = new DOMException('The operation was aborted.', 'AbortError');
+    const ai: GenAILike = {
+      models: {
+        async embedContent() {
+          throw abortError;
+        },
+      },
+    };
+    const client = createGeminiEmbedClient(ai, 'gemini-embedding-2');
+
+    const result = await client.embedBatch(['a']);
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('aborted');
   });
 });

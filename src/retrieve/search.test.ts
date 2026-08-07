@@ -135,6 +135,43 @@ describe('searchChunks', () => {
     expect(dbCalls).toHaveLength(0);
   });
 
+  it('[REQ] an already-aborted signal issues zero SQL, even when the embed call would have succeeded', async () => {
+    const { client } = fakeEmbedClient();
+    const { db, calls: dbCalls } = fakeDb([fullRow]);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await searchChunks('anything', 'postgres://unused', 'gemini-embedding-2', {
+      embedClient: client,
+      db,
+      signal: controller.signal,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('aborted');
+    expect(dbCalls).toHaveLength(0);
+  });
+
+  it('classifies an aborted embed call as kind aborted, not embed', async () => {
+    const client: EmbedClient = {
+      async embedBatch() {
+        return { ok: false, error: { kind: 'aborted', message: 'aborted' } };
+      },
+    };
+    const { db, calls: dbCalls } = fakeDb([fullRow]);
+
+    const result = await searchChunks('anything', 'postgres://unused', 'gemini-embedding-2', {
+      embedClient: client,
+      db,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.kind).toBe('aborted');
+    expect(dbCalls).toHaveLength(0);
+  });
+
   it('[12] never ends an injected db', async () => {
     const { client } = fakeEmbedClient();
     const { db } = fakeDb([fullRow]);

@@ -127,6 +127,39 @@ describe('indexChunks', () => {
     expect(result.value.upserted).toBe(3);
   });
 
+  it('[25][REQ] a cancelled embedding batch writes no partial entries to the content-hash cache', async () => {
+    const chunk = testChunk();
+    const setCalls: unknown[] = [];
+    const cache: EmbedCache = {
+      async get() {
+        return null;
+      },
+      async set(hash, model, vector) {
+        setCalls.push({ hash, model, vector });
+      },
+    };
+    const controller = new AbortController();
+    controller.abort();
+    const client: EmbedClient = {
+      async embedBatch(texts, signal) {
+        expect(signal?.aborted).toBe(true);
+        return { ok: false, error: { kind: 'aborted', message: 'aborted' } };
+      },
+    };
+    const { db, calls: dbCalls } = fakeDb();
+
+    const result = await indexChunks([chunk], 'https://github.com/o/r', 'postgres://unused', 'gemini-embedding-2', {
+      embedClient: client,
+      cache,
+      db,
+      signal: controller.signal,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(setCalls).toHaveLength(0);
+    expect(dbCalls).toHaveLength(0);
+  });
+
   it('propagates an embedding failure without writing anything to the db', async () => {
     const chunk = testChunk();
     const cache = fakeCache();

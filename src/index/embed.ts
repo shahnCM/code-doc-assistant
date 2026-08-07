@@ -21,6 +21,7 @@ export interface IndexOptions {
   db?: Db;
   cacheDir?: string;
   batchOptions?: EmbedBatchOptions;
+  signal?: AbortSignal;
 }
 
 function groupByContentHash(chunks: readonly Chunk[]): Map<string, Chunk[]> {
@@ -76,7 +77,10 @@ export async function indexChunks(
     }
 
     if (missTexts.length > 0) {
-      const embedResult = await embedTexts(missTexts, embedClient, options.batchOptions);
+      const embedResult = await embedTexts(missTexts, embedClient, {
+        ...(options.batchOptions ?? {}),
+        ...(options.signal !== undefined ? { signal: options.signal } : {}),
+      });
       if (!embedResult.ok) {
         return { ok: false, error: `embedding failed: ${embedResult.error.message}` };
       }

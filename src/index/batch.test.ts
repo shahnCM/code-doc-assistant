@@ -127,6 +127,21 @@ describe('embedTexts', () => {
     expect(elapsed).toBeLessThan(2000);
   });
 
+  it('threads an optional signal through to every embedBatch call', async () => {
+    const controller = new AbortController();
+    const seenSignals: Array<AbortSignal | undefined> = [];
+    const client: EmbedClient = {
+      async embedBatch(texts, signal) {
+        seenSignals.push(signal);
+        return { ok: true, value: texts.map(() => [0]) };
+      },
+    };
+
+    await embedTexts(['a', 'b'], client, { batchSize: 1, concurrency: 2, signal: controller.signal });
+
+    expect(seenSignals).toEqual([controller.signal, controller.signal]);
+  });
+
   it('preserves original text order across concurrently-processed batches', async () => {
     const client: EmbedClient = {
       async embedBatch(texts) {

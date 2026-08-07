@@ -6,6 +6,7 @@ export interface EmbedBatchOptions {
   concurrency?: number;
   maxRetries?: number;
   baseDelayMs?: number;
+  signal?: AbortSignal;
 }
 
 const DEFAULT_BATCH_SIZE = 20;
@@ -44,10 +45,11 @@ async function embedBatchWithRetry(
   client: EmbedClient,
   maxRetries: number,
   baseDelayMs: number,
+  signal: AbortSignal | undefined,
 ): Promise<Result<number[][], EmbedError>> {
   let attempt = 0;
   for (;;) {
-    const result = await client.embedBatch(batch);
+    const result = await client.embedBatch(batch, signal);
     if (result.ok) return result;
     if (result.error.kind !== 'rate-limit' || attempt >= maxRetries) return result;
     await sleep(computeRetryDelayMs(result.error, attempt, baseDelayMs));
@@ -78,7 +80,7 @@ export async function embedTexts(
       if (index >= batches.length) return;
       const batch = batches[index];
       if (!batch) continue;
-      const result = await embedBatchWithRetry(batch, client, maxRetries, baseDelayMs);
+      const result = await embedBatchWithRetry(batch, client, maxRetries, baseDelayMs, options.signal);
       if (!result.ok) {
         failure = result.error;
         return;

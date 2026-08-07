@@ -3,13 +3,17 @@ import { createPgDb, toVectorLiteral, type Db, type PgDb } from '../index/db.js'
 import { realEmbedClient, type EmbedClient } from '../index/embedClient.js';
 import { buildParams, HYBRID_SQL, type RetrieveOptions } from './fusion.js';
 
-export type RetrieveError = { kind: 'embed'; message: string } | { kind: 'db'; message: string };
+export type RetrieveError =
+  | { kind: 'embed'; message: string }
+  | { kind: 'db'; message: string }
+  | { kind: 'aborted'; message: string };
 
 export interface SearchOptions extends RetrieveOptions {
   embedClient?: EmbedClient;
   db?: Db;
   /** Pool factory, injected for tests so pool ownership is verifiable without a real Postgres. */
   dbFactory?: (connectionString: string) => PgDb;
+  signal?: AbortSignal;
 }
 
 function asString(value: unknown): string {
@@ -72,13 +76,20 @@ export async function searchChunks(
   }
 
   try {
-    const embedResult = await embedClient.embedBatch([query]);
+    const embedResult = await embedClient.embedBatch([query], options.signal);
     if (!embedResult.ok) {
-      return { ok: false, error: { kind: 'embed', message: embedResult.error.message } };
+      const kind = embedResult.error.kind === 'aborted' ? 'aborted' : 'embed';
+      return { ok: false, error: { kind, message: embedResult.error.message } };
     }
     const [vector] = embedResult.value;
     if (!vector) {
       return { ok: false, error: { kind: 'embed', message: 'embedBatch returned no vector for the query' } };
+    }
+
+    // node-postgres ignores AbortSignal entirely, so this is the only place a caller's
+    // cancellation actually stops the query from being issued.
+    if (options.signal?.aborted) {
+      return { ok: false, error: { kind: 'aborted', message: 'aborted before query' } };
     }
 
     const params = buildParams(toVectorLiteral(vector), query, options);

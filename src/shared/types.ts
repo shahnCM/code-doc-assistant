@@ -114,3 +114,26 @@ export interface CitationValidation {
   valid: Citation[];
   invalid: Array<{ citation: Citation; reason: CitationProblem }>;
 }
+
+export interface AssembledChunkTrace {
+  id: number;
+  filePath: string;
+  symbolName: string | null;
+  startLine: number;
+  endLine: number;
+  language: string;
+  chunkerKind: string;
+  denseRank: number | null;
+  lexicalRank: number | null;
+  fusedScore: number;
+  /** False when the chunk was retrieved but lost dedupe or budget truncation. */
+  included: boolean;
+}
+
+export type ChatEvent =
+  | { type: 'trace'; chunks: AssembledChunkTrace[]; retrieveMs: number; contextTokens: number }
+  | { type: 'token'; text: string }
+  | { type: 'citations'; valid: Citation[]; invalid: CitationValidation['invalid'] }
+  | { type: 'done'; finishReason: string; generateMs: number; totalMs: number }
+  | { type: 'cancelled'; elapsedMs: number; estimatedTokensNotGenerated: number; note: string }
+  | { type: 'error'; message: string };
