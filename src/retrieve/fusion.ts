@@ -22,7 +22,13 @@ export const DEFAULT_TOP_K = 10;
 export const DEFAULT_DENSE_WEIGHT = 1.0;
 export const DEFAULT_LEXICAL_WEIGHT = 1.0;
 
-// Executed as written against the live dev database (plans/03-retrieval.md, Verified 1, 2).
+// Executed as written against the live dev database (plans/03-retrieval.md, Verified 1, 2) via
+// PREPARE with explicit param types — which is exactly what hid a real bug: node-postgres sends
+// params untyped, and without the ::float8 casts below, Postgres infers $6/$8/$9 as bigint (to
+// match dense_rank's type), so "$8 / ($6 + dense_rank)" becomes INTEGER division and every
+// fused_score silently truncates to 0. Do not remove these casts — PREPARE with declared types
+// will not catch a regression here; only an unprepared db.query() call will.
+//
 // Do not "simplify" the nested ORDER BY/LIMIT per leg — that's what keeps the HNSW index scan
 // instead of ranking the whole table before limiting (Verified 7). Do not collapse the two
 // COALESCE calls into one around the sum — a one-leg row's NULL rank would zero the whole score
@@ -34,31 +40,31 @@ WITH dense AS (
          FROM chunks c
          WHERE $4::text IS NULL OR c.repo_source = $4
          ORDER BY c.embedding <=> $1
-         LIMIT $3 ) d
+         LIMIT $3::int ) d
 ),
 lexical AS (
   SELECT id, score, ROW_NUMBER() OVER (ORDER BY score DESC, id ASC) AS lexical_rank
   FROM ( SELECT c.id,
                 ts_rank(c.tsv, websearch_to_tsquery('english', $2), 1)
-                  + CASE WHEN lower(c.symbol_name) = lower(btrim($2)) THEN $5 ELSE 0 END AS score
+                  + CASE WHEN lower(c.symbol_name) = lower(btrim($2)) THEN $5::float8 ELSE 0 END AS score
          FROM chunks c
          WHERE ($4::text IS NULL OR c.repo_source = $4)
            AND ( c.tsv @@ websearch_to_tsquery('english', $2)
                  OR lower(c.symbol_name) = lower(btrim($2)) )
          ORDER BY score DESC, c.id ASC
-         LIMIT $3 ) l
+         LIMIT $3::int ) l
 )
 SELECT c.id, c.repo_source, c.file_path, c.symbol_name, c.kind, c.signature,
        c.start_line, c.end_line, c.language, c.chunker_kind, c.content,
        d.dense_rank, l.lexical_rank, d.dist AS dense_distance, l.score AS lexical_score,
-       COALESCE($8 / ($6 + d.dense_rank), 0)
-         + COALESCE($9 / ($6 + l.lexical_rank), 0) AS fused_score
+       COALESCE($8::float8 / ($6::float8 + d.dense_rank), 0)
+         + COALESCE($9::float8 / ($6::float8 + l.lexical_rank), 0) AS fused_score
 FROM dense d
 FULL OUTER JOIN lexical l USING (id)
 JOIN chunks c ON c.id = COALESCE(d.id, l.id)
-ORDER BY COALESCE($8 / ($6 + d.dense_rank), 0)
-       + COALESCE($9 / ($6 + l.lexical_rank), 0) DESC, c.id ASC
-LIMIT $7;
+ORDER BY COALESCE($8::float8 / ($6::float8 + d.dense_rank), 0)
+       + COALESCE($9::float8 / ($6::float8 + l.lexical_rank), 0) DESC, c.id ASC
+LIMIT $7::int;
 `;
 
 /**

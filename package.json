@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "vitest run --passWithNoTests",
+    "test:db": "node --env-file=.env node_modules/.bin/vitest run --config vitest.db.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/web/tsconfig.json",
     "lint": "eslint .",
     "ingest": "tsx --env-file=.env src/ingest/cli.ts",
