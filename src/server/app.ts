@@ -14,6 +14,7 @@ export interface AppDeps {
   embedClient?: EmbedClient;
   genClient?: GenClient;
   onError?: (error: unknown) => void;
+  isShuttingDown?: (() => boolean) | undefined;
 }
 
 export function createApp(deps: AppDeps): Express {
@@ -21,7 +22,7 @@ export function createApp(deps: AppDeps): Express {
   app.use(express.json());
 
   app.get('/health', createHealthHandler());
-  app.get('/ready', createReadyHandler(deps.db));
+  app.get('/ready', createReadyHandler(deps.db, { isShuttingDown: deps.isShuttingDown }));
   app.post('/api/chat', createChatHandler(deps));
   app.get('/api/source', createSourceHandler({ db: deps.db }));
 

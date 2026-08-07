@@ -40,6 +40,7 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
   const config = envResult.value;
 
   const pgDb = dbFactory(config.DATABASE_URL);
+  let shuttingDown = false;
 
   const app = createApp({
     db: pgDb.db,
@@ -49,6 +50,7 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
     ...(embedClient !== undefined ? { embedClient } : {}),
     ...(genClient !== undefined ? { genClient } : {}),
     onError: (error) => logError(`unhandled request error: ${error instanceof Error ? error.message : String(error)}`),
+    isShuttingDown: () => shuttingDown,
   });
 
   const server = app.listen(config.PORT, '0.0.0.0', () => {
@@ -60,6 +62,7 @@ export async function startServer(options: ServerOptions = {}): Promise<StartedS
   server.headersTimeout = 65_000;
 
   const close = async (): Promise<void> => {
+    shuttingDown = true;
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await pgDb.end();
   };
@@ -73,8 +76,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   } else {
     const shutdown = (signal: string): void => {
-      console.log(`received ${signal}, shutting down`);
-      void started.close().then(() => process.exit(0));
+      console.log(`received ${signal}, draining in-flight connections`);
+      void started.close().then(() => {
+        console.log('shutdown complete');
+        process.exit(0);
+      });
     };
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));

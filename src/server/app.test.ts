@@ -88,11 +88,19 @@ describe('GET /ready', () => {
     });
   });
 
-  it('[27] returns 200 when the DB check resolves', async () => {
-    const deps: AppDeps = { ...baseAppDeps, db: fakeDb([]) };
+  it('[27] returns 200 when the DB reports every migration in migrations/ as applied', async () => {
+    const deps: AppDeps = { ...baseAppDeps, db: fakeDb([{ name: '001_init' }]) };
     await withApp(deps, async (baseUrl) => {
       const res = await fetch(`${baseUrl}/ready`);
       expect(res.status).toBe(200);
+    });
+  });
+
+  it('returns 503 when a migration in migrations/ is missing from the applied rows', async () => {
+    const deps: AppDeps = { ...baseAppDeps, db: fakeDb([]) };
+    await withApp(deps, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/ready`);
+      expect(res.status).toBe(503);
     });
   });
 });
