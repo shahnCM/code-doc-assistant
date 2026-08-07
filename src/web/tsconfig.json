@@ -5,6 +5,6 @@
     "module": "ESNext", "moduleResolution": "bundler",
     "jsx": "react-jsx", "types": ["vite/client"]
   },
-  "include": [".", "../shared/types.ts"],
+  "include": [".", "../shared/types.ts", "../tokens.ts"],
   "exclude": []
 }
