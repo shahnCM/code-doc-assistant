@@ -6,8 +6,27 @@ the assistant). This file covers: how the pieces fit together, how to work on on
 without understanding the whole system, what's practically improvable, what's deliberately
 deferred, and a concrete design proposal for making the AI provider layer pluggable.
 
-Everything here was verified against the code at time of writing (Block 4 complete, Block 5
-not started). Line numbers will drift — treat them as "look here," not as guarantees.
+Everything here was re-verified against the code through Block 9 (README/deploy complete —
+Blocks 6 and 7, call-graph expansion and the eval harness, were cut by deliberate scope decision,
+not left unbuilt by accident). Line numbers will drift — treat them as "look here," not as
+guarantees. This doc stays scoped to the server/RAG pipeline by design, so `src/web/`'s domain
+entry below is intentionally brief — see `README.md` for the UI's own feature tour and
+screenshots.
+
+Two things caught and fixed after Block 8 originally shipped, worth recording here since neither
+was a design change, just something never finished:
+- **`docker compose up` used to bring up the API only** — `GET /` 404'd, no `build:web` script
+  existed, and `src/server/app.ts` had no static-file route. Fixed: `npm run build` now also runs
+  `vite build`, and `app.ts` serves `dist/web/` (static files + an SPA fallback, mounted after
+  every API route) when a build is present — a no-op otherwise, so local dev without a web build
+  is unaffected. Verified against the actual compiled artifact: `node dist/server/index.js` then
+  `curl localhost:8080/` → 200 with the real page, `/health`/`/ready` unaffected.
+- **`npm ci` itself failed** — `typescript-eslint@8.66.0`'s peer range (`typescript >=4.8.4
+  <6.1.0`) conflicted with this project's `typescript@7.0.2`, so both the CI job's `npm ci` and
+  the Dockerfile's build-stage `npm ci` would have failed before anything else ran. Fixed by
+  replacing `eslint`/`typescript-eslint` with `oxlint` (no dependency on the `typescript`
+  package's version), which resolved the peer conflict as a side effect. `npm run lint` now
+  actually runs and is in CI.
 
 ## 1. Architecture overview
 
@@ -44,7 +63,8 @@ src/shared/     types.ts — zero runtime, imported by both server and client
 src/config.ts   env parsing (zod) — Node-only, never imported from src/web
 src/logger.ts   pino — Node-only, never imported from src/web
 src/tokens.ts   estimateTokens — pure, no I/O, used by both ingest and generate
-src/web/        React client — not yet built (Block 5); only tsconfig.json exists today
+src/web/        React client (Block 5) — `npm run build` compiles it to dist/web/, which
+                src/server/app.ts serves as static files + an SPA fallback (§7.7)
 ```
 
 ## 2. Domain tour
@@ -93,6 +113,15 @@ body with zod, opens an SSE stream (`sse.ts`), threads one `AbortSignal` (client
 boundary as a 500. `index.ts`'s `startServer()` is the testable bootstrap (everything
 injectable — `env`, `dbFactory`, `embedClient`, `genClient`) with a thin top-level guard for
 the real process, binding `0.0.0.0` per CLAUDE.md's port-publishing requirement.
+
+**`src/web/`** — brief by design; this doc is scoped to the server/RAG pipeline, and the UI is a
+pure consumer of the Block 4 HTTP contract with no server-side code of its own. `hooks/
+useChatStream.ts` owns the one piece of real client logic (a `fetch` + `AbortController` state
+machine over `lib/sseStream.ts`'s SSE frame parser); `components/` is thin rendering on top of it
+(`ChatPane`, `MessageBubble`, `CitationChip`, `SourcePane`, `TracePanel`). Two ways to run it:
+`npm run dev:web` (Vite on `:5173`, proxies `/api` to `:8080`, hot reload — day-to-day
+development) or `npm run build` (compiles it to `dist/web/` alongside `tsc`'s server output),
+which `src/server/app.ts` then serves directly on `:8080` — see §7.7 for how.
 
 ## 3. Request/data lifecycle walkthroughs
 
@@ -155,8 +184,13 @@ Hard boundary to remember: `src/retrieve/` must never import `src/ingest/` (this
   `store.ts`, `fusion.ts`'s DB-integration test, or anything issuing real SQL.
 - `npm run typecheck` — `tsc --noEmit` for both the root (server + shared) and
   `src/web/tsconfig.json` (client) configs. Always run both before considering a change done.
-- `npm run lint` — currently **broken** (`eslint.config.js` doesn't exist yet); do not treat
-  its absence from a verification gate as an oversight.
+- `npm run lint` — runs `oxlint .`. Originally `eslint`, replaced because
+  `typescript-eslint@8.66.0`'s peer range (`typescript >=4.8.4 <6.1.0`) hard-conflicts with this
+  project's `typescript@7.0.2` — not a missing config, an unresolvable peer graph (`npm ci` itself
+  failed, not just the lint command; confirmed by simulating both the CI job's plain `npm ci` and
+  the Dockerfile's `npm ci --omit=dev` in an isolated copy). oxlint has no dependency on the
+  `typescript` package's version at all, so it's immune to this class of conflict. Now part of
+  CI (`.github/workflows/ci.yml`).
 - An `npm run eval` script (retrieval quality against a golden set) is described in
   `BUILD-PLAN.md` as Block 7 scope but **does not exist in `package.json` yet** — don't assume
   it runs today.
@@ -190,7 +224,6 @@ Concrete, code-grounded — not generic advice:
    positive: `src/index/batch.ts`'s `embedBatchWithRetry`/`computeRetryDelayMs` depend only on
    `EmbedError.kind`/`retryAfterMs`, never anything Gemini-specific. A second provider needs
    zero changes there — only an honest `classify` function.
-
 ## 8. What's deliberately deferred, not a bug
 
 - **Query-embedding caching is ingestion-only by design, today** (see §7.2). A query-side
