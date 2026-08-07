@@ -8,7 +8,7 @@
     "test:db": "node --env-file=.env node_modules/.bin/vitest run --config vitest.db.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/web/tsconfig.json",
     "lint": "oxlint .",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && vite build --config src/web/vite.config.ts",
     "ingest": "tsx --env-file=.env src/ingest/cli.ts",
     "migrate": "node --env-file=.env node_modules/.bin/node-pg-migrate up",
     "serve": "tsx --env-file=.env src/server/index.ts",

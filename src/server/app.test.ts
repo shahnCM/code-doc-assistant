@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
 import type { GenChunk, GenClient, GenError } from '../generate/llmClient.js';
@@ -221,6 +224,56 @@ describe('GET /api/source', () => {
       const res = await fetch(url);
       const body = (await res.json()) as { endLine: number };
       expect(body.endLine).toBe(400);
+    });
+  });
+});
+
+describe('static web UI serving', () => {
+  it('with no web build present, GET / still 404s — identical to today, no behavior change', async () => {
+    const emptyDir = mkdtempSync(join(tmpdir(), 'app-test-no-build-'));
+    const deps: AppDeps = { ...baseAppDeps, db: fakeDb([]), webDistDir: emptyDir };
+    await withApp(deps, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/`);
+      expect(res.status).toBe(404);
+    });
+  });
+
+  it('with a web build present, GET / serves index.html and an unmatched deep path falls back to it too', async () => {
+    const distDir = mkdtempSync(join(tmpdir(), 'app-test-with-build-'));
+    writeFileSync(join(distDir, 'index.html'), '<html><body>chat ui</body></html>');
+    mkdirSync(join(distDir, 'assets'));
+    writeFileSync(join(distDir, 'assets', 'app.js'), 'console.log("app bundle");');
+    const deps: AppDeps = { ...baseAppDeps, db: fakeDb([]), webDistDir: distDir };
+
+    await withApp(deps, async (baseUrl) => {
+      const root = await fetch(`${baseUrl}/`);
+      expect(root.status).toBe(200);
+      expect(await root.text()).toContain('chat ui');
+
+      const deepPath = await fetch(`${baseUrl}/some/unmatched/deep/path`);
+      expect(deepPath.status).toBe(200);
+      expect(await deepPath.text()).toContain('chat ui');
+
+      const asset = await fetch(`${baseUrl}/assets/app.js`);
+      expect(asset.status).toBe(200);
+      const assetBody = await asset.text();
+      expect(assetBody).toContain('app bundle');
+      expect(assetBody).not.toContain('chat ui');
+    });
+  });
+
+  it('API routes still take priority over the SPA fallback once a web build is present', async () => {
+    const distDir = mkdtempSync(join(tmpdir(), 'app-test-priority-'));
+    writeFileSync(join(distDir, 'index.html'), '<html><body>chat ui</body></html>');
+    const deps: AppDeps = { ...baseAppDeps, db: fakeDb([{ name: '001_init' }]), webDistDir: distDir };
+
+    await withApp(deps, async (baseUrl) => {
+      const health = await fetch(`${baseUrl}/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual({ status: 'ok' });
+
+      const ready = await fetch(`${baseUrl}/ready`);
+      expect(ready.status).toBe(200);
     });
   });
 });
