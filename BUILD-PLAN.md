@@ -733,39 +733,71 @@ rather than from memory. **Never before the hard checkpoint.**
 
 Non-negotiable, and cheap if planned as one slice.
 
+**Two audiences, one artifact:** the Dockerfile is written production-fashion (multi-stage,
+non-root, slim runtime) because that's what a senior AI-native coder ships — but the
+docker-compose.yml is the interview surface. An interviewer must be able to clone, run one
+command, and have a working app with zero knowledge of the `workstation`/dev-container setup
+this was built in. If those two goals ever conflict, compose ergonomics win.
+
 ```
 plan: production readiness.
 
 - Multi-stage Dockerfile from node:24.18.0-slim: build stage, slim runtime, non-root user,
   no dev deps in the final image. `git` must be present in the runtime image — ingest clones.
+- The app itself is a service in docker-compose.yml, not just documented as "build the
+  Dockerfile yourself." `docker compose up` must build the app image, start Postgres, run
+  migrations, and bring up a working server — no separate `npm ci` / `npm run migrate` step
+  outside compose. Use a one-shot `migrate` service (profile or `depends_on` with
+  `condition: service_completed_successfully`) that runs node-pg-migrate and exits, gating
+  the app service's start on it.
 - Shipped docker-compose.yml uses `pgvector/pgvector:0.8.6-pg16` (version-pinned, not the
   floating `pg16` tag) — NOT my dev image. Graders must not build a custom GIS image to run
   a take-home.
-- Healthchecks on both services, depends_on with condition: service_healthy.
-- Env validated with zod at boot — process refuses to start on a missing key, loudly.
+- Compose reads a single `.env` at the project root (copy of `.env.example`) — one file, one
+  place to add the Gemini key, no separate envs for host vs. container.
+- Healthchecks on both the postgres and app services, depends_on with
+  condition: service_healthy (app on postgres; anything downstream of migrate on
+  service_completed_successfully).
+- Env validated with zod at boot — process refuses to start on a missing key, loudly, with a
+  message that names the exact missing var (this is what an interviewer sees first if they
+  forget to set GEMINI_API_KEY).
 - Graceful shutdown: SIGTERM drains in-flight SSE connections before exit.
 - /health (liveness) and /ready (DB reachable + migrations applied) are distinct.
+- Ingest is NOT a compose service — it's a one-off command an interviewer runs after
+  `docker compose up`: `docker compose exec app npm run ingest -- --repo <url>`. Document
+  this as the second command in the quick-start, right after `docker compose up`.
 - .github/workflows/ci.yml: typecheck, lint, test, docker build. On push and PR.
 
 TESTS: env validation rejects a missing key; /ready returns 503 when migrations are pending.
-Write plans/08-deploy.md. STOP WHEN docker compose up succeeds from a clean clone.
+Write plans/08-deploy.md. STOP WHEN `docker compose up` alone (from .env.example copied to
+.env, key filled in) brings up a fully working, ready-to-query app — not just a running
+Postgres — from a clean clone.
 ```
 
-Then the test that catches more than any other:
+**Gate — the actual interviewer simulation:**
 
 ```bash
 cd /tmp && git clone <your-repo> fresh && cd fresh
-# follow your own README verbatim, changing nothing
+cp .env.example .env    # fill in GEMINI_API_KEY only — nothing else
+docker compose up       # single command, no prior npm/node on the host at all
 ```
 
-Run this from the **host**, not the workstation — that is the environment a grader has, and it
-catches every place you accidentally depended on `postgres-16` being resolvable by hostname.
-Ingest a GitHub URL in this run, not a local path — that is the path a grader will actually
-take, and it exercises the clone code that never runs in your dev loop.
+Run this from the **host**, not the workstation container, with no other setup. If this
+doesn't produce a working app on `localhost:8080` end to end, the block isn't done — this is
+the exact sequence a grader follows, and it's the one you can't fake by testing from inside
+your dev container. Then:
+
+```bash
+docker compose exec app npm run ingest -- --repo https://github.com/honojs/hono
+```
+
+confirms the documented second command also works with zero host tooling beyond Docker.
 
 **Version note for the README:** you developed against pgvector 0.8.6 and Node 24.18.0. Say so.
 0.8.x has HNSW, `halfvec` and iterative index scans that older builds lack, and a grader on a
 different version shouldn't quietly get worse retrieval than you measured.
+
+**Commit + tag.** `git tag v0.2-deployable`
 
 ---
 
