@@ -9,7 +9,9 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/web/tsconfig.json",
     "lint": "eslint .",
     "ingest": "tsx --env-file=.env src/ingest/cli.ts",
-    "migrate": "node --env-file=.env node_modules/.bin/node-pg-migrate up"
+    "migrate": "node --env-file=.env node_modules/.bin/node-pg-migrate up",
+    "serve": "tsx --env-file=.env src/server/index.ts",
+    "dev:server": "tsx watch --env-file=.env src/server/index.ts"
   },
   "keywords": [],
   "author": "",
@@ -19,6 +21,7 @@
     "node": ">=24"
   },
   "devDependencies": {
+    "@types/express": "^5.0.6",
     "@types/node": "^26.1.2",
     "@types/pg": "^8.20.4",
     "eslint": "^10.8.0",
@@ -33,6 +36,7 @@
   },
   "dependencies": {
     "@google/genai": "^2.16.0",
+    "express": "^5.2.1",
     "pg": "^8.22.0",
     "pino": "^10.3.1",
     "ts-morph": "^28.0.0",

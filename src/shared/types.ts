@@ -137,3 +137,13 @@ export type ChatEvent =
   | { type: 'done'; finishReason: string; generateMs: number; totalMs: number }
   | { type: 'cancelled'; elapsedMs: number; estimatedTokensNotGenerated: number; note: string }
   | { type: 'error'; message: string };
+
+export interface SourceRange {
+  repoSource: string;
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  blocks: Array<{ startLine: number; endLine: number; content: string }>;
+  /** Line spans inside [startLine, endLine] that no chunk covers. Never rendered as code. */
+  gaps: Array<{ startLine: number; endLine: number }>;
+}

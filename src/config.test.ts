@@ -13,7 +13,7 @@ describe('loadEnv', () => {
     const result = loadEnv(validEnv);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value).toEqual(validEnv);
+    expect(result.value).toEqual({ ...validEnv, PORT: 8080 });
   });
 
   it('[REQ] returns ok:false with a readable message when a required key is missing', () => {
