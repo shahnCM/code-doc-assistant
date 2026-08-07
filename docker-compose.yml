@@ -1,0 +1,48 @@
+# Quick start:
+#   cp .env.example .env   # fill in GEMINI_API_KEY
+#   docker compose up
+#
+# Ingest is a one-off, not a compose service — run after `docker compose up`:
+#   docker compose exec app node dist/ingest/cli.js --repo <path-or-url>
+# (not `npm run ingest`: that script's `node --env-file=.env` expects a literal .env file in the
+# container, which doesn't exist there — env comes from this file's env_file: entries instead.)
+
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg16
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: codedocs
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d codedocs"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    build: .
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Bypasses `npm run migrate` for the same --env-file reason noted above.
+    command: ["node", "node_modules/.bin/node-pg-migrate", "up"]
+    restart: "no"
+
+  app:
+    build: .
+    env_file: .env
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # HEALTHCHECK is defined in the Dockerfile (hits /health via Node's global fetch).
+
+volumes:
+  pgdata:
