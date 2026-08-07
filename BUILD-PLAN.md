@@ -771,17 +771,58 @@ different version shouldn't quietly get worse retrieval than you measured.
 
 # BLOCK 9 — README & submit (16:30 → 18:00)
 
-`/clear` first. Then, deliberately, **close the Claude Code panel.**
+`/clear` first.
 
-The README is the one artifact they explicitly said must be your own thinking. You have
-`NOTES.md`, your `plans/` files, the decisions list at the top of this document, and your eval
-table — everything you need is already written down. Use Claude only as a fact-checker at the
-very end:
+The README is the artifact you're accountable for — Claude generates the first full draft from
+material that's already written down (`NOTES.md`, `plans/` files, the decisions list at the top
+of this document, and your eval table), and you audit every claim before it ships. Nothing in
+the draft gets accepted on trust.
+
+### GENERATE — Sonnet, plenty of context
+
+```
+Read @README.md (the scaffold — every `> PROMPT:` line is a question to answer, every
+`> NOTES:` block is raw material to rewrite in your own words, never paste verbatim),
+@NOTES.md, @plans/*.md, and the decisions list and eval table in @BUILD-PLAN.md.
+
+Write a complete README.md replacing every PROMPT/NOTES block with real prose answering
+that section, grounded only in what plans/*.md and NOTES.md actually record. Do not invent
+numbers, corpus names, commit SHAs, or eval results you don't have source data for — leave
+an explicit placeholder instead:
+
+  <FILL: description>
+
+for anything you cannot source from the repo (screenshots, eval numbers not yet run, demo
+corpus names/SHAs not yet recorded). Use this exact placeholder format so they're
+grep-able: `<FILL: ...>` for missing facts, `<SCREENSHOT: description>` for images.
+
+State the language tiering plainly in the first paragraph — optimised for TS/JS, generic
+structural chunking elsewhere. Claim exactly what was built, no more.
+
+Keep the "Protected files" banner and the engineering-standards content honest — no
+softening of named shortcuts (no auth, no retries, thin UI coverage, archived MCP server).
+
+STOP WHEN README.md is fully written with no PROMPT/NOTES scaffold text remaining.
+```
+
+### AUDIT — you, not Claude
+
+Go through the generated README section by section against the actual repo:
+
+- [ ] Every `<FILL: ...>` and `<SCREENSHOT: ...>` placeholder — fill or capture, don't leave any in
+- [ ] Every claim about architecture, decisions, and gotchas — checked against `plans/*.md` and code
+- [ ] Eval numbers match `npm run eval` output exactly, not paraphrased
+- [ ] Reject/rewrite anything that reads templated or overclaims — this is the one artifact
+      graders will read as your own thinking, so restore your voice where it's missing
+
+### FACT-CHECK — final pass, after your edits
 
 ```
 Read @README.md and the repo. List only statements in the README that the code does not
 actually do. No style edits, no rewrites, no suggestions.
 ```
+
+Fix whatever comes back. Re-run this once after fixes — don't assume the second pass is clean.
 
 - [ ] Screenshots: chat with citations, source viewer, trace panel
 - [ ] Commit the `plans/` files — evidence of how you work
@@ -790,8 +831,6 @@ actually do. No style edits, no rewrites, no suggestions.
 - [ ] Confirm every brief bullet has a section: setup, architecture, productionising,
       RAG/LLM decisions **including orchestration framework**, key technical decisions,
       engineering standards *and* the ones skipped, AI tool usage, what you'd do differently
-- [ ] State the language tiering plainly in the first paragraph — optimised for TS/JS, generic
-      structural chunking elsewhere. Claim exactly what you built, no more
 - [ ] Repo name and README title match what the thing actually is
 
 ---
