@@ -13,10 +13,10 @@ export function App() {
 
   return (
     <div className="flex h-dvh flex-col bg-white text-gray-900">
-      <header className="flex items-center gap-3 border-b border-gray-200 px-4 py-3">
+      <header className="flex flex-col gap-2 border-b border-gray-200 px-4 py-3 md:flex-row md:items-center md:gap-3">
         <h1 className="text-lg font-semibold">Code Documentation Assistant</h1>
         <input
-          className="ml-auto w-64 rounded border border-gray-300 px-2 py-1 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          className="rounded border border-gray-300 px-2 py-1 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:ml-auto md:w-64"
           value={repoSource}
           onChange={handleRepoSourceChange}
           placeholder="repo source (e.g. ./tmp/hono)"
