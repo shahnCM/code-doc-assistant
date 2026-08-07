@@ -1,4 +1,4 @@
-import type { Citation, CitationProblem } from '../../shared/types.js';
+import type { Citation, CitationProblem, CitationValidation } from '../../shared/types.js';
 
 // Duplicated from src/generate/citations.ts:3, pinned to CITATION_FORMAT in
 // src/generate/prompt.ts:6 — kept out of the browser bundle rather than imported, per
@@ -60,4 +60,23 @@ export function splitWithCitations(
   }
 
   return segments;
+}
+
+// Converts the citations SSE event's resolved valid/invalid lists into the lookup
+// splitWithCitations expects, keyed by raw citation text. Returns an empty lookup while the
+// stream is still in-flight (citations === null) — every citation-shaped substring then renders
+// as plain text, per splitWithCitations's own behaviour with an unresolved entry.
+export function buildCitationLookup(
+  citations: CitationValidation | null,
+): Map<string, CitationLookupEntry> {
+  const lookup = new Map<string, CitationLookupEntry>();
+  if (!citations) return lookup;
+
+  for (const citation of citations.valid) {
+    lookup.set(citation.raw, { citation, valid: true });
+  }
+  for (const { citation, reason } of citations.invalid) {
+    lookup.set(citation.raw, { citation, valid: false, reason });
+  }
+  return lookup;
 }

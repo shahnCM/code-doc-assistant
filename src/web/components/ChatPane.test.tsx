@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ChatPane } from './ChatPane.js';
 
 function sseFrame(event: unknown): Uint8Array {
@@ -92,5 +92,41 @@ describe('ChatPane', () => {
     handle.close();
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('generation failed'));
+  });
+
+  it('renders a resolved citation as a chip and keeps it after a second turn starts', async () => {
+    const handles = [fakeStream(), fakeStream()];
+    let call = 0;
+    globalThis.fetch = (async () => {
+      const handle = handles[call];
+      call += 1;
+      return { ok: true, status: 200, body: handle?.stream } as Response;
+    }) as typeof fetch;
+    const onCitationSelect = vi.fn();
+    const user = userEvent.setup();
+
+    render(<ChatPane repoSource="./tmp/hono" onCitationSelect={onCitationSelect} />);
+    await sendQuestion(user, 'how does chunking work?');
+
+    const first = handles[0];
+    if (!first) throw new Error('expected first fake stream');
+    first.push({ type: 'token', text: 'see src/a.ts:10-20 for it' });
+    first.push({
+      type: 'citations',
+      valid: [{ filePath: 'src/a.ts', startLine: 10, endLine: 20, raw: 'src/a.ts:10-20' }],
+      invalid: [],
+    });
+    first.push({ type: 'done', finishReason: 'STOP', generateMs: 1, totalMs: 2 });
+    first.close();
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'src/a.ts:10-20' })).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'src/a.ts:10-20' }));
+    expect(onCitationSelect).toHaveBeenCalledWith({ filePath: 'src/a.ts', startLine: 10, endLine: 20 });
+
+    // A second turn resets the hook's own `citations` back to null — the chip from the first
+    // turn must survive that via ChatPane's own citationsByIndex, not the hook's state.
+    await sendQuestion(user, 'a follow-up question');
+    await waitFor(() => expect(screen.getByText('a follow-up question')).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: 'src/a.ts:10-20' })).toBeInTheDocument();
   });
 });

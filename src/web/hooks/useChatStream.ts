@@ -144,6 +144,6 @@ export function useChatStream(): UseChatStream {
 // Per the WHATWG spec, DOMException does not extend Error — true in real browsers and in
 // jsdom, unlike Node's own DOMException, which does. `instanceof Error` alone would
 // misclassify every user-initiated Stop as a generic error once this ships to a browser.
-function isAbortError(error: unknown): boolean {
+export function isAbortError(error: unknown): boolean {
   return typeof error === 'object' && error !== null && 'name' in error && error.name === 'AbortError';
 }

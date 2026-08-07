@@ -1,14 +1,21 @@
 import { useEffect, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import type { ChatMessage } from '../../shared/types.js';
+import type { ChatMessage, CitationValidation } from '../../shared/types.js';
 import { useChatStream } from '../hooks/useChatStream.js';
+import type { CitationRange } from './CitationChip.js';
+import { MessageBubble } from './MessageBubble.js';
 
 export interface ChatPaneProps {
   repoSource: string;
+  onCitationSelect?: ((range: CitationRange) => void) | undefined;
 }
 
-export function ChatPane({ repoSource }: ChatPaneProps) {
+export function ChatPane({ repoSource, onCitationSelect }: ChatPaneProps) {
   const { state, send, stop } = useChatStream();
   const [history, setHistory] = useState<ChatMessage[]>([]);
+  // Keyed by the assistant message's index in `history` — the hook resets its own `citations`
+  // on every new send(), so a prior turn's resolved citations must live here to still render as
+  // chips once a later turn is in flight. ChatMessage itself carries no id to key by instead.
+  const [citationsByIndex, setCitationsByIndex] = useState<Record<number, CitationValidation>>({});
   const [input, setInput] = useState('');
   const previousStatusRef = useRef(state.status);
 
@@ -19,10 +26,15 @@ export function ChatPane({ repoSource }: ChatPaneProps) {
     previousStatusRef.current = state.status;
     const justFinished =
       previousStatus === 'streaming' && (state.status === 'done' || state.status === 'cancelled');
-    if (justFinished) {
-      setHistory((prev) => [...prev, { role: 'assistant', content: state.partialText }]);
+    if (!justFinished) return;
+
+    const newIndex = history.length;
+    const citations = state.citations;
+    setHistory((prev) => [...prev, { role: 'assistant', content: state.partialText }]);
+    if (citations) {
+      setCitationsByIndex((prev) => ({ ...prev, [newIndex]: citations }));
     }
-  }, [state.status, state.partialText]);
+  }, [state.status, state.partialText, state.citations, history.length]);
 
   useEffect(() => stop, [stop]);
 
@@ -55,16 +67,19 @@ export function ChatPane({ repoSource }: ChatPaneProps) {
           <ul className="flex flex-col gap-3">
             {history.map((message, index) => (
               <li key={index} className={message.role === 'user' ? 'text-right' : 'text-left'}>
-                <p className="inline-block rounded-lg bg-gray-100 px-3 py-2 text-sm whitespace-pre-wrap">
-                  {message.content}
-                </p>
+                <MessageBubble
+                  message={message}
+                  citations={citationsByIndex[index] ?? null}
+                  onCitationSelect={onCitationSelect}
+                />
               </li>
             ))}
             {isStreaming && (
               <li className="text-left">
-                <p className="inline-block rounded-lg bg-gray-100 px-3 py-2 text-sm whitespace-pre-wrap">
-                  {state.partialText || '…'}
-                </p>
+                <MessageBubble
+                  message={{ role: 'assistant', content: state.partialText || '…' }}
+                  citations={null}
+                />
               </li>
             )}
           </ul>

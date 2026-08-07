@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Citation } from '../../shared/types.js';
-import { splitWithCitations, type CitationLookupEntry, type Segment } from './citations.js';
+import { buildCitationLookup, splitWithCitations, type CitationLookupEntry, type Segment } from './citations.js';
 
 describe('splitWithCitations', () => {
   it('places a valid citation segment inline between the surrounding text', () => {
@@ -49,5 +49,33 @@ describe('splitWithCitations', () => {
     expect(segments).toEqual([
       { type: 'citation', citation, valid: false, reason: 'unknown-file' },
     ] satisfies Segment[]);
+  });
+});
+
+describe('buildCitationLookup', () => {
+  it('marks valid and invalid citations correctly, keyed by raw text', () => {
+    const validCitation: Citation = { filePath: 'src/a.ts', startLine: 1, endLine: 2, raw: 'src/a.ts:1-2' };
+    const invalidCitation: Citation = {
+      filePath: 'src/missing.ts',
+      startLine: 1,
+      endLine: 1,
+      raw: 'src/missing.ts:1',
+    };
+
+    const lookup = buildCitationLookup({
+      valid: [validCitation],
+      invalid: [{ citation: invalidCitation, reason: 'unknown-file' }],
+    });
+
+    expect(lookup.get(validCitation.raw)).toEqual({ citation: validCitation, valid: true });
+    expect(lookup.get(invalidCitation.raw)).toEqual({
+      citation: invalidCitation,
+      valid: false,
+      reason: 'unknown-file',
+    });
+  });
+
+  it('returns an empty lookup when citations have not resolved yet', () => {
+    expect(buildCitationLookup(null).size).toBe(0);
   });
 });
