@@ -29,3 +29,7 @@ HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
     CMD node -e "fetch('http://localhost:8080/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["node", "dist/server/index.js"]
+
+# This image alone doesn't start Postgres or run migrations — see docker-compose.yml, which
+# builds this same image for both the `migrate` and `app` services and is the actual way to
+# run this (`docker compose up` spins up postgres, runs migrate, then starts app).
