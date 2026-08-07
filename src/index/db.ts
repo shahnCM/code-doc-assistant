@@ -21,3 +21,7 @@ export function createPgDb(connectionString: string): PgDb {
     end: () => pool.end(),
   };
 }
+
+export function toVectorLiteral(vector: readonly number[]): string {
+  return `[${vector.join(',')}]`;
+}

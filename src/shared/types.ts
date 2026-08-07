@@ -75,3 +75,22 @@ export interface AcquiredRepo {
   source: 'local' | 'git';
   commitSha: string | null;
 }
+
+export interface RetrievedChunk {
+  id: number;
+  repoSource: string;
+  filePath: string;
+  symbolName: string | null;
+  kind: ChunkKind;
+  signature: string | null;
+  startLine: number;
+  endLine: number;
+  language: string;
+  chunkerKind: string;
+  content: string;
+  denseRank: number | null;
+  lexicalRank: number | null;
+  denseDistance: number | null;
+  lexicalScore: number | null;
+  fusedScore: number;
+}

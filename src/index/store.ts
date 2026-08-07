@@ -1,13 +1,9 @@
 import type { Chunk, Result } from '../shared/types.js';
-import type { Db } from './db.js';
+import { toVectorLiteral, type Db } from './db.js';
 
 export interface EmbeddedChunk {
   chunk: Chunk;
   embedding: readonly number[];
-}
-
-function toVectorLiteral(vector: readonly number[]): string {
-  return `[${vector.join(',')}]`;
 }
 
 const INSERT_SQL = `
