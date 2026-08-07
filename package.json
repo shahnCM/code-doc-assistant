@@ -8,6 +8,7 @@
     "test:db": "node --env-file=.env node_modules/.bin/vitest run --config vitest.db.config.ts",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/web/tsconfig.json",
     "lint": "eslint .",
+    "build": "tsc -p tsconfig.build.json",
     "ingest": "tsx --env-file=.env src/ingest/cli.ts",
     "migrate": "node --env-file=.env node_modules/.bin/node-pg-migrate up",
     "serve": "tsx --env-file=.env src/server/index.ts",
@@ -34,7 +35,6 @@
     "@vitejs/plugin-react": "^6.0.5",
     "eslint": "^10.8.0",
     "jsdom": "^30.0.1",
-    "node-pg-migrate": "^9.0.0",
     "playwright": "^1.62.1",
     "prettier": "^3.9.6",
     "tailwindcss": "^4.3.3",
@@ -49,6 +49,7 @@
   "dependencies": {
     "@google/genai": "^2.16.0",
     "express": "^5.2.1",
+    "node-pg-migrate": "^9.0.0",
     "pg": "^8.22.0",
     "pino": "^10.3.1",
     "react": "^19.2.8",
