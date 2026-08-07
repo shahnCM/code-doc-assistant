@@ -94,3 +94,23 @@ export interface RetrievedChunk {
   lexicalScore: number | null;
   fusedScore: number;
 }
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface Citation {
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  /** Exactly as the model wrote it, so the UI can highlight the original span. */
+  raw: string;
+}
+
+export type CitationProblem = 'unknown-file' | 'range-not-retrieved';
+
+export interface CitationValidation {
+  valid: Citation[];
+  invalid: Array<{ citation: Citation; reason: CitationProblem }>;
+}
