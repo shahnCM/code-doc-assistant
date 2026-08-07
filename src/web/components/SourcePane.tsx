@@ -6,6 +6,7 @@ import type { CitationRange } from './CitationChip.js';
 export interface SourcePaneProps {
   repoSource: string;
   selection: CitationRange | null;
+  onClose?: (() => void) | undefined;
 }
 
 type SourcePaneStatus = 'empty' | 'missing-repo-source' | 'loading' | 'success' | 'no-results' | 'error';
@@ -28,7 +29,7 @@ function mergeBlocksAndGaps(range: SourceRange): RenderSegment[] {
   return segments.sort((a, b) => a.startLine - b.startLine);
 }
 
-export function SourcePane({ repoSource, selection }: SourcePaneProps) {
+export function SourcePane({ repoSource, selection, onClose }: SourcePaneProps) {
   const [status, setStatus] = useState<SourcePaneStatus>('empty');
   const [range, setRange] = useState<SourceRange | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -79,9 +80,33 @@ export function SourcePane({ repoSource, selection }: SourcePaneProps) {
     return () => controller.abort();
   }, [repoSource, selection?.filePath, selection?.startLine, selection?.endLine]);
 
+  // On mobile the pane is a slide-up drawer, out of the document flow (`fixed`) and hidden below
+  // the viewport until a citation is selected; at `md` and up it becomes a normal static side
+  // pane instead. Deriving "open" from `selection` means no separate open/closed state to keep
+  // in sync (plans/05-frontend.md Decisions).
+  const isOpenOnMobile = selection !== null;
+
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="border-b border-gray-200 px-3 py-2 text-xs font-semibold text-gray-500">Source</div>
+    <div
+      className={[
+        'fixed inset-x-0 bottom-0 z-20 flex max-h-[70dvh] flex-col overflow-hidden rounded-t-lg border-t border-gray-200 bg-white shadow-lg transition-transform duration-200',
+        isOpenOnMobile ? 'translate-y-0' : 'translate-y-full',
+        'md:static md:z-auto md:h-full md:max-h-none md:w-96 md:flex-shrink-0 md:translate-y-0 md:rounded-none md:border-t-0 md:border-l md:shadow-none',
+      ].join(' ')}
+    >
+      <div className="flex items-center justify-between border-b border-gray-200 px-3 py-2">
+        <span className="text-xs font-semibold text-gray-500">Source</span>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="close source pane"
+            className="text-xs text-gray-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent md:hidden"
+          >
+            Close
+          </button>
+        )}
+      </div>
       <div className="flex-1 overflow-y-auto">
         {status === 'empty' && <p className="p-4 text-sm text-gray-500">Select a citation to view its source.</p>}
         {status === 'missing-repo-source' && (
@@ -95,14 +120,14 @@ export function SourcePane({ repoSource, selection }: SourcePaneProps) {
           </p>
         )}
         {status === 'success' && range && (
-          <div className="p-4 font-mono text-xs">
+          <div className="p-4 text-xs">
             {mergeBlocksAndGaps(range).map((segment, index) =>
               segment.kind === 'gap' ? (
                 <p key={index} className="my-1 text-gray-400 italic">
                   ⋯ lines {segment.startLine}-{segment.endLine} not indexed ⋯
                 </p>
               ) : (
-                <pre key={index} className="whitespace-pre-wrap">
+                <pre key={index} className="font-mono whitespace-pre-wrap">
                   <code>{segment.content}</code>
                 </pre>
               ),

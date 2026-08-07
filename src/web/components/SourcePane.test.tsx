@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SourceRange } from '../../shared/types.js';
 import { SourcePane } from './SourcePane.js';
@@ -76,5 +77,28 @@ describe('SourcePane', () => {
     render(<SourcePane repoSource="./tmp/hono" selection={selection} />);
 
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('network down'));
+  });
+
+  it('toggles the mobile drawer transform class based on whether a citation is selected', () => {
+    globalThis.fetch = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+
+    const { container, rerender } = render(<SourcePane repoSource="./tmp/hono" selection={null} />);
+    const pane = container.firstElementChild;
+    if (!pane) throw new Error('expected pane root element');
+    expect(pane.className).toMatch(/translate-y-full/);
+
+    rerender(<SourcePane repoSource="./tmp/hono" selection={selection} />);
+    expect(pane.className).toMatch(/translate-y-0/);
+  });
+
+  it('calls onClose when the mobile close button is clicked', async () => {
+    globalThis.fetch = vi.fn(() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+
+    render(<SourcePane repoSource="./tmp/hono" selection={selection} onClose={onClose} />);
+    await user.click(screen.getByRole('button', { name: /close source pane/i }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

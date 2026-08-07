@@ -3,6 +3,7 @@ import type { ChatMessage, CitationValidation } from '../../shared/types.js';
 import { useChatStream } from '../hooks/useChatStream.js';
 import type { CitationRange } from './CitationChip.js';
 import { MessageBubble } from './MessageBubble.js';
+import { TracePanel } from './TracePanel.js';
 
 export interface ChatPaneProps {
   repoSource: string;
@@ -91,9 +92,11 @@ export function ChatPane({ repoSource, onCitationSelect }: ChatPaneProps) {
         )}
       </div>
 
+      <TracePanel trace={state.trace} cancelInfo={state.cancelInfo} />
+
       <form onSubmit={handleSubmit} className="flex gap-2 border-t border-gray-200 p-3">
         <input
-          className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus:outline-2 focus:outline-accent"
+          className="flex-1 rounded border border-gray-300 px-3 py-2 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           value={input}
           onChange={handleInputChange}
           placeholder="Ask a question…"
@@ -103,14 +106,14 @@ export function ChatPane({ repoSource, onCitationSelect }: ChatPaneProps) {
           <button
             type="button"
             onClick={stop}
-            className="rounded bg-gray-900 px-4 py-2 text-sm font-semibold text-white focus:outline-2 focus:outline-accent"
+            className="rounded bg-gray-900 px-4 py-2 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             Stop
           </button>
         ) : (
           <button
             type="submit"
-            className="rounded bg-accent px-4 py-2 text-sm font-semibold text-white focus:outline-2 focus:outline-offset-2 focus:outline-accent"
+            className="rounded bg-accent px-4 py-2 text-sm font-semibold text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
           >
             Send
           </button>
