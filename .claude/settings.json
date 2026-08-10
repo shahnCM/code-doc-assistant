@@ -4,7 +4,9 @@
       { "matcher": "Bash",
         "hooks": [{ "type": "command", "command": ".claude/guard.sh" }] },
       { "matcher": "Edit|Write",
-        "hooks": [{ "type": "command", "command": ".claude/protect.sh" }] }
+        "hooks": [{ "type": "command", "command": ".claude/protect.sh" }] },
+      { "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": ".claude/confirm-attribution.sh" }] }
     ],
     "Stop": [{ "hooks": [{ "type": "command",
       "command": ".claude/stop-gate.sh" }] }]
