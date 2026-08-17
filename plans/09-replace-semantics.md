@@ -1,5 +1,51 @@
 # Block 9 — Replace semantics on ingest
 
+## Status — read this first
+
+**Not implemented. This file is the whole of the work so far.**
+
+Branch `fix/replace-semantics-on-ingest` holds four commits, all documentation:
+
+```
+94e768e  docs: add architecture flow map
+60e3a24  docs: correct three CLAUDE.md drifts and ignore personal prep notes
+489067b  docs(plans): correct Block 9 framing
+bac2b20  docs(plans): add Block 9
+```
+
+The branch name promises a fix the branch does not contain. Before writing code, decide whether
+to rename it, merge these docs to `develop` and cut a fresh branch, or keep it as is.
+
+**Database state when this was written (2026-08-17):**
+
+```
+chunks (live)              63 rows
+  ./tmp/sampleproject      29
+  is-plain-obj             20
+  ./tmp/mini-demo          13
+  ./tmp/health-app          1   ← one-file demo, kind='file', no-declarations outcome
+
+chunks_backup_20260817     62 rows   ← taken BEFORE ./tmp/health-app was ingested
+```
+
+Restoring the backup therefore drops the `health-app` row. Recovery, if a destructive test goes
+wrong:
+
+```
+psql "$DATABASE_URL" -c "TRUNCATE chunks; INSERT INTO chunks SELECT * FROM chunks_backup_20260817;"
+```
+
+Re-ingesting `./tmp/sampleproject` afterwards costs nothing — all 29 of its content hashes are
+present in `.cache/embeddings/` (verified 29/29). Drop `chunks_backup_20260817` once this block
+lands.
+
+**A related defect found after this plan was written, deliberately not folded in:**
+whole-file chunks over-report `end_line` by one whenever the source ends with a trailing newline,
+because `wholeFileChunks` reads `sourceFile.getEndLineNumber()` (`ts-morph.ts:501`). Declaration
+chunks are unaffected. Documented in `flow-map.md`, section F. It shares this block's theme —
+silent, small, lands on the citation guarantee — but it lives in the chunker, not the store, and
+fixing it here would widen the diff past one idea.
+
 ## Context
 
 Ingest is currently **insert-only and idempotent by content hash**. `upsertChunks` issues one
@@ -106,9 +152,26 @@ deleted; the 62-row corpus was confirmed intact afterward.
    with `startLine: 55`. This block **inverts a `[REQ]` test**. That is a deliberate reversal of a
    written requirement and should be called out in review, not slipped in.
 
-9. **Test impact is bounded.** `upsertChunks` is referenced by `src/index/store.ts`,
-   `src/index/embed.ts`, `src/index/store.test.ts` (5 tests, hand-rolled `fakeDb` that parses the SQL
-   string), and `src/retrieve/fusion.db.test.ts` (uses it to seed its fixture).
+9. **`upsertChunks` has four call sites, but widening `Db` touches nine test files.** Two different
+   blast radii, and the second is the one that sets the schedule.
+
+   `upsertChunks` itself: `src/index/store.ts`, `src/index/embed.ts`, `src/index/store.test.ts`
+   (5 tests, hand-rolled `fakeDb` that parses the SQL string), `src/retrieve/fusion.db.test.ts`
+   (seeds its fixture with it).
+
+   Adding a method to the `Db` interface breaks **every hand-rolled fake**, and there are nine:
+
+   ```
+   src/index/store.test.ts:11          src/generate/answer.test.ts:36
+   src/index/embed.test.ts:34          src/server/app.test.ts:12
+   src/ingest/cli.test.ts:47           src/server/routes/chat.test.ts:53
+   src/retrieve/search.test.ts:22      src/server/routes/health.test.ts:28
+   src/retrieve/source.test.ts:10
+   ```
+
+   Each needs one line — `withTransaction: async (fn) => fn(db)` — but nine files must be touched
+   before `npm run typecheck` goes green again, and the change cannot be landed half-done.
+   Budget for this; it is the single largest mechanical cost in the block.
 
 10. **Baseline is green.** `npm test` → 212 passed, 39 files. `npm run typecheck` → clean, both
    configs. Backup taken: `chunks_backup_20260817`, 62 rows.
@@ -282,8 +345,8 @@ block's whole subject is a `DELETE` keyed on `repo_source`. A fixture bug here d
 
 ## TASKS
 
-1. Slice 1 — tests for `withTransaction`, then `db.ts`. Update every fake `Db` to satisfy the widened
-   interface (`store.test.ts`, `embed.test.ts`, `fusion.db.test.ts`, any other).
+1. Slice 1 — tests for `withTransaction`, then `db.ts`, then all **nine** fake `Db` implementations
+   listed in Verified 9. Typecheck stays red until every one is updated.
 2. Slice 2 — tests for `replaceChunks`, then `store.ts`. Invert the `[REQ]` test.
 3. Slice 3 — report and CLI output.
 4. Slice 4 — db contract test with the `test://` guard.
