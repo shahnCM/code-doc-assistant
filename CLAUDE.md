@@ -22,10 +22,10 @@ ts-morph · vitest · pino
 ```
 npm test              vitest run          (never bare `vitest` — watch mode hangs hooks/CI)
 npm run typecheck     tsc --noEmit for both server and client configs
-npm run lint          eslint
+npm run lint          oxlint
 npm run ingest        index a repo:  -- --repo ./tmp/hono
                                      -- --repo https://github.com/honojs/hono
-npm run eval          retrieval eval against evals/golden.json
+npm run test:db       contract tests vs the REAL dev database — never runs in CI
 npm run migrate       node-pg-migrate up
 ```
 
@@ -63,7 +63,7 @@ src/ingest/     acquire (local path | git clone) → walk → language router
                   └ everything else             → generic structural chunker
                 → enrichment headers (identical shape from both paths)
 src/index/      embed (cached by contentHash) → pgvector + tsvector
-src/retrieve/   dense + lexical → RRF fusion → call-graph expansion (TS/JS only)
+src/retrieve/   dense + lexical → RRF fusion
 src/generate/   context assembly → LLM → citation parsing/validation
 src/server/     express routes, SSE streaming
 src/web/        react client (own tsconfig — browser lib, bundler resolution)
@@ -104,8 +104,9 @@ One package, two entry points. Root `tsconfig.json` covers server + shared and e
 - Repo acquisition: `git clone --depth 1` into `./tmp/`, public HTTPS URLs only. No auth, no
   SSH. Private repos are what the local-path mode is for — say that in the README rather than
   half-implementing token support.
-- Call-graph expansion (`symbol_edges`) is TS/JS only. Generic-chunked repos get retrieval
-  without expansion, not a broken expansion.
+- Call-graph expansion (`symbol_edges`, BUILD-PLAN Block 6) was CUT and is NOT built — there is
+  no `symbol_edges` table and no code for it. If it is ever added it is TS/JS only, and
+  generic-chunked repos must get retrieval without expansion, not a broken expansion.
 - The generic chunker must never fabricate a `signature` or `jsDoc`. A best-effort
   `symbolName` from a definition-looking first line is fine; anything more is a lie the
   citation validator can't catch.
