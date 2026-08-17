@@ -7,20 +7,30 @@ Ingest is currently **insert-only and idempotent by content hash**. `upsertChunk
 whose code has not changed is a no-op — no writes, no cost. That is the property Block 2 was built
 for, and it works.
 
-The cost of that property was not traced through. `content_hash` is computed from
+The cost of that property was identified, named, and accepted. `content_hash` is computed from
 `chunkerKind + filePath + symbolName + partIndex + content` (`src/ingest/hash.ts`). It deliberately
 excludes everything else the row carries — `start_line`, `end_line`, `signature`, `js_doc`, `kind`,
 `is_exported`, `parent_symbol`, `language`, `part_total`, `embed_text`, and `embedding`. When any of
 those change without `content` changing, `DO NOTHING` fires and the database keeps the stale value.
 
+`plans/02-embedding.md:232-235` says so directly, in its RISKS section: *"`DO NOTHING` leaves stale
+`start_line`/`end_line` … Accepted per the confirmed decision, not silently absorbed — citations
+built on a stale row would point at the wrong lines until the table is reset."*
+
+**This block does not report a newly discovered defect. It revisits an accepted risk, because the
+acceptance was mis-weighted.** What Block 2 recorded as an operational inconvenience — "until the
+table is reset" — is in fact a correctness failure in the single guarantee the product makes, and it
+is *undetectable from inside the system*. That second half is what the original acceptance missed.
+
 Two consequences, in order of severity:
 
-1. **Stale line numbers break citations.** Add an import at the top of a file and every declaration
-   below it shifts down. No `content` changed, so no hash changed, so `DO NOTHING` keeps the old
-   `start_line`/`end_line`. The answer then cites `foo.ts:12-20` for a function that now lives at
-   14-22. `validateCitations` cannot catch this: it validates the model's cited range against the
-   same stale numbers it was given. This is a silent wrong-answer bug in the one property the
-   project sells — `file:line` citations.
+1. **Stale line numbers break citations, invisibly.** Add an import at the top of a file and every
+   declaration below it shifts down. No `content` changed, so no hash changed, so `DO NOTHING` keeps
+   the old `start_line`/`end_line`. The answer then cites `foo.ts:12-20` for a function that now
+   lives at 14-22. `validateCitations` cannot catch this: it validates the model's cited range
+   against the same stale numbers it was given, so the citation is reported *valid*. There is no
+   error, no warning, and no metric that moves. A risk worth accepting is one you would notice
+   firing; this one cannot fire visibly.
 2. **Switching embedding models is a paid no-op.** Same content → same hash → `DO NOTHING`. Every
    vector is recomputed and billed, and none of them reach the table. The only signal is
    `Upserted: 0` in the CLI output.
@@ -80,18 +90,27 @@ deleted; the 62-row corpus was confirmed intact afterward.
    hash, both reach `upsertChunks` and the unique constraint drops the second. Removing
    `ON CONFLICT DO NOTHING` would turn that into a duplicate-key error mid-ingest.
 
-7. **The stale-line-number behaviour is an asserted requirement, not an oversight.**
+7. **The stale-line consequence was documented in Block 2 and accepted, not missed.**
+   `plans/02-embedding.md:60` records the conflict behaviour as a confirmed decision — *"a chunk
+   whose content is unchanged but whose line numbers shifted elsewhere in the file keeps its stale
+   `start_line`/`end_line` until the row is cleared and re-inserted. Named directly in RISKS, not
+   hidden."* — and `plans/02-embedding.md:232-235` spells out the citation consequence. This block
+   reverses a judgement, not an oversight. The reversal's grounds are narrow and should be stated as
+   such: the risk was weighed as an operational cost ("until the table is reset") without weighing
+   that nothing in the system can detect it having fired.
+
+8. **The stale-line-number behaviour is also an asserted requirement.**
    `src/index/store.test.ts:85` is titled
    `[REQ] a repeat (repo_source, content_hash) is a no-op — the existing row keeps its original
    start_line/end_line` and asserts `stored?.start_line).toBe(10)` after re-inserting the same chunk
    with `startLine: 55`. This block **inverts a `[REQ]` test**. That is a deliberate reversal of a
    written requirement and should be called out in review, not slipped in.
 
-8. **Test impact is bounded.** `upsertChunks` is referenced by `src/index/store.ts`,
+9. **Test impact is bounded.** `upsertChunks` is referenced by `src/index/store.ts`,
    `src/index/embed.ts`, `src/index/store.test.ts` (5 tests, hand-rolled `fakeDb` that parses the SQL
    string), and `src/retrieve/fusion.db.test.ts` (uses it to seed its fixture).
 
-9. **Baseline is green.** `npm test` → 212 passed, 39 files. `npm run typecheck` → clean, both
+10. **Baseline is green.** `npm test` → 212 passed, 39 files. `npm run typecheck` → clean, both
    configs. Backup taken: `chunks_backup_20260817`, 62 rows.
 
 ## Decisions
@@ -256,7 +275,8 @@ block's whole subject is a `DELETE` keyed on `repo_source`. A fixture bug here d
   first hono run.
 - **`created_at` no longer means "first indexed".** Replace makes every row new. Nothing reads it
   today.
-- **Inverting a `[REQ]` test** (Verified 7). Reviewers should see this called out, not discover it.
+- **Inverting a `[REQ]` test** (Verified 8), and reversing an accepted risk from Block 2
+  (Verified 7). Reviewers should see this called out, not discover it.
 - **`CLAUDE.md` needs a new gotcha entry** describing replace semantics and the `Pool`/transaction
   trap. `CLAUDE.md` is protected — draft to scratchpad and let the human apply it.
 
