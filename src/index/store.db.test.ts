@@ -154,6 +154,30 @@ describe('replaceChunks contract (real Postgres)', () => {
     expect(stored?.['end_line']).toBe(79);
   });
 
+  it('[REQ] a new vector under an unchanged content_hash replaces the stored embedding — the model-switch case', async () => {
+    const storedVector = async (): Promise<string> => {
+      const result = await db.query(
+        'SELECT embedding::text AS embedding FROM chunks WHERE repo_source = $1 AND content_hash = $2',
+        [requireTestSource(REPO_SOURCE), alpha.contentHash],
+      );
+      return String(result.rows[0]?.['embedding']);
+    };
+
+    expect(await storedVector()).toMatch(/^\[0\.1,/);
+
+    // Same chunk, same content, same hash — only the vector differs. That is exactly what
+    // switching EMBED_MODEL produces, since content_hash does not cover the embedding. Under
+    // ON CONFLICT DO NOTHING this insert was discarded whole: the recomputed vector was billed
+    // to the API and never reached the table, and the only signal was Upserted: 0.
+    const result = await replaceChunks(db, requireTestSource(REPO_SOURCE), [
+      { chunk: alpha, embedding: vectorOf(0.4) },
+      { chunk: beta, embedding: vectorOf(0.2) },
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(await storedVector()).toMatch(/^\[0\.4,/);
+  });
+
   it('[REQ] the delete is scoped to one repo_source — a neighbouring source is untouched', async () => {
     await replaceChunks(db, requireTestSource(REPO_SOURCE), []);
 
