@@ -45,7 +45,7 @@ flowchart TD
   N9["8 · embed.ts"]
   CA[("cache<br/>.cache/embeddings")]
   GEM(["Gemini<br/>embedding-2"])
-  N10["9 · store.ts<br/>ON CONFLICT<br/>DO NOTHING"]
+  N10["9 · store.ts<br/>replaceChunks<br/>DELETE then INSERT<br/>in one txn"]
   DB[("Postgres<br/>chunks")]
 
   N1 --> N2 --> N3 --> N4 --> N5
@@ -61,16 +61,18 @@ flowchart TD
   N9 --> N10 --> DB
 
   style N7 stroke:#8F5510,stroke-width:2px
-  style N10 stroke:#A03328,stroke-width:2px
+  style N10 stroke:#1F6F43,stroke-width:2px
 ```
 
 **Orange — why generic is last.** Its `supports()` returns `true` for everything, same as a 404
 handler at the bottom of an Express router. Put it first and `ts-morph` never runs.
 
-**Red — the one open defect.** `ON CONFLICT DO NOTHING` keys on `(repo_source, content_hash)`, and
-the hash excludes `start_line`. Add an import at the top of a file, everything below shifts, content
-is unchanged, hash is unchanged — the database keeps the old line numbers, and the citation
-validator checks against those same stale numbers. Planned fix: `plans/09-replace-semantics.md`.
+**Green — step 9 used to be the one open defect.** It was
+`INSERT ... ON CONFLICT (repo_source, content_hash) DO NOTHING`, and the hash excludes
+`start_line`. Add an import at the top of a file, everything below shifts, content is unchanged,
+hash is unchanged — the database kept the old line numbers, and the citation validator checked
+against those same stale numbers, so a wrong citation was reported *valid*. Fixed by Block 9;
+before and after in [section G](#g--what-block-9-changed-at-step-9).
 
 ---
 
@@ -227,4 +229,71 @@ Nearly every file in a real repo ends with a newline, so **every whole-file chun
 `end_line` by one.** Scope is narrow — declaration chunks take their bounds from the declaration
 itself and are unaffected — but the consequence is real: a citation of `server.js:13` would pass
 containment (`13 <= 13`) and point at a line that renders empty. Same family as everything else
-here: small, silent, and it lands on the citation guarantee. Not yet fixed, not yet planned.
+here: small, silent, and it lands on the citation guarantee. Still open — deliberately left out of
+Block 9, which fixed the store; this one lives in the chunker.
+
+---
+
+## G · What Block 9 changed, at step 9
+
+Step 9 was insert-only. A re-ingest of unchanged content was free, and that property was the point
+— but it was bought by skipping the whole row on conflict, including the columns the hash does not
+cover.
+
+**Before** — the row is skipped, and nothing anywhere reports it:
+
+```mermaid
+flowchart TD
+  A["re-ingest<br/>content unchanged"] --> B["hash unchanged"]
+  B --> C{"ON CONFLICT<br/>repo_source +<br/>content_hash"}
+  C -->|"row exists"| D["DO NOTHING<br/>whole row skipped"]
+  D --> E["stale start_line<br/>stale vector<br/>deleted code stays"]
+  E --> F["citation checked<br/>against the stale row<br/>reported valid"]
+  style F stroke:#A03328,stroke-width:2px
+```
+
+**After** — the post-condition is structural, so there is no per-column reasoning to get wrong:
+
+```mermaid
+flowchart TD
+  A["re-ingest"] --> T["db.withTransaction<br/>one pooled client<br/>BEGIN"]
+  T --> D["DELETE<br/>WHERE repo_source"]
+  D --> I["INSERT every chunk<br/>DO NOTHING kept<br/>for same-run dupes"]
+  I --> Q{"all ok?"}
+  Q -->|"yes"| K["COMMIT"]
+  Q -->|"no"| R["ROLLBACK<br/>corpus untouched"]
+  K --> S["current lines<br/>current vectors<br/>no orphans"]
+  style S stroke:#1F6F43,stroke-width:2px
+  style R stroke:#8F5510,stroke-width:2px
+```
+
+### Before and after, attribute by attribute
+
+| | Before | After |
+|---|---|---|
+| Statement | `INSERT ... ON CONFLICT DO NOTHING` | `DELETE ... RETURNING id`, then the same INSERT loop |
+| Transaction | none — `pool.query('BEGIN')` lands on a different connection and silently does nothing | `db.withTransaction` holds one `pool.connect()` client for the whole step |
+| Re-ingest, content unchanged | row skipped entire | row deleted and rewritten |
+| `start_line` after a shift above it | stale | current |
+| Vector after an embedding-model switch | stale; the new one is billed and discarded | current |
+| Code deleted from the repo | row survives and stays retrievable | row gone |
+| Failure mid-store | partial writes possible | `ROLLBACK`, corpus exactly as before |
+| CLI report | `Upserted: 0` for both "nothing changed" and "everything rejected" | `Deleted: N` and `Inserted: N`, separately |
+| `DO NOTHING` | what made re-ingest idempotent | only collapses duplicate hashes inside one run |
+
+### Measured, on `./tmp/mini-demo`
+
+13 chunks, 13/13 cache hits, zero Gemini calls in either run.
+
+```
+                        before Block 9        after Block 9
+row ids after re-ingest  120-132 unchanged     175-187, all rewritten
+CLI                      Upserted: 0           Deleted: 13, Inserted: 13
+
+prepend 2 lines to src/api/client.ts, re-ingest:
+  content_hash           5771efb8d3c8          5771efb8d3c8   (unchanged, as expected)
+  PricingClient          4-20  (wrong)         6-22  (correct)
+```
+
+The hash staying identical while the lines move is the whole point — that is precisely the case
+the old path could not see, and the case no error, warning, or metric would have surfaced.
