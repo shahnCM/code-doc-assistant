@@ -43,7 +43,7 @@ flowchart TD
   N7["6b · generic.ts<br/>everything else"]
   N8["7 · enrich.ts<br/>header + hash"]
   N9["8 · embed.ts"]
-  CA[("cache<br/>.cache/embeddings")]
+  CA[("cache<br/>.cache/embeddings<br/>keyed hash + model")]
   GEM(["Gemini<br/>embedding-2"])
   N10["9 · store.ts<br/>replaceChunks<br/>DELETE then INSERT<br/>in one txn"]
   DB[("Postgres<br/>chunks")]
@@ -54,7 +54,7 @@ flowchart TD
   N6 --> N8
   N7 --> N8
   N8 --> N9
-  N9 -->|"look up hash"| CA
+  N9 -->|"look up hash + model"| CA
   CA -.->|"hit, free"| N9
   N9 -->|"miss, costs"| GEM
   GEM -.->|"768 floats"| N9
@@ -73,6 +73,14 @@ handler at the bottom of an Express router. Put it first and `ts-morph` never ru
 hash is unchanged — the database kept the old line numbers, and the citation validator checked
 against those same stale numbers, so a wrong citation was reported *valid*. Fixed by Block 9;
 before and after in [section G](#g--what-block-9-changed-at-step-9).
+
+**Why step 8's cache key carries the model.** `content_hash` covers the chunk's text, not the
+vector, so on its own it cannot tell one embedding model's output from another's. The cache stores
+the model alongside the vector and treats a mismatch as a miss (`cache.ts:34`), which is what makes
+switching `EMBED_MODEL` re-embed rather than serve stale vectors. Step 9 used to throw that work
+away — the recomputed vectors were billed and then discarded by `DO NOTHING`, with `Upserted: 0` as
+the only sign. Only same-dimension swaps got that far; a different `EMBEDDING_DIM` fails loudly at
+insert and needs a migration.
 
 ---
 
