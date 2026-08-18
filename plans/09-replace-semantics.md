@@ -2,49 +2,68 @@
 
 ## Status — read this first
 
-**Not implemented. This file is the whole of the work so far.**
-
-Branch `fix/replace-semantics-on-ingest` holds four commits, all documentation:
+**Implemented 2026-08-18. All four slices landed.** The sections below are kept as written, so
+where the plan and the code disagree, the code is right and the deviations are listed here.
 
 ```
-94e768e  docs: add architecture flow map
-60e3a24  docs: correct three CLAUDE.md drifts and ignore personal prep notes
-489067b  docs(plans): correct Block 9 framing
-bac2b20  docs(plans): add Block 9
+c4f1f2d  test(index): prove replace semantics against real Postgres   (Slice 4)
+ea34b10  feat(ingest): report rows deleted and inserted separately    (Slice 3)
+b1b6cf3  feat(index): replace upsertChunks with replaceChunks         (Slice 2)
+1f7425f  feat(index): add withTransaction to the Db interface         (Slice 1)
 ```
 
-The branch name promises a fix the branch does not contain. Before writing code, decide whether
-to rename it, merge these docs to `develop` and cut a fresh branch, or keep it as is.
+The five preceding docs commits were fast-forwarded onto `develop` before coding started, so the
+branch name now matches its contents.
 
-**Database state when this was written (2026-08-17):**
+**Three deviations from the plan as written:**
+
+1. **The signature in FILES cannot typecheck.** It specifies
+   `withTransaction<T, E>(fn) => Promise<Result<T, E>>` while also requiring a thrown error to
+   become `{ ok: false, error: message }`. A `catch` only ever holds a string, so it cannot
+   manufacture an arbitrary `E`. Shipped as `Promise<Result<T, E | string>>`; every current caller
+   has `E = string`, so the union collapses and no call site changed.
+2. **A new seam, `createDb(pool)`.** `createPgDb` builds its own `Pool`, leaving nothing to inject
+   and no way to test the transaction offline. `createPgDb` keeps its signature and delegates.
+3. **Verified 9 undercounts.** Widening `Db` broke **thirteen** construction sites across **ten**
+   files, not nine files. `src/server/index.test.ts:17` builds its fake inline inside a `PgDb`
+   literal with no `: Db` annotation, so it is contextually typed and invisible to a grep for the
+   annotation — only the compiler found it.
+
+**Verified against the live database with `./tmp/mini-demo`** (13 chunks, 13/13 cached, zero
+Gemini calls): a re-ingest moved every row id and left the other three sources untouched.
+Prepending two lines to `src/api/client.ts` moved `PricingClient` from 4-20 to 6-22 under an
+unchanged `content_hash` — the exact scenario the old `[REQ]` test froze. CLI reported
+`Deleted: 13, Inserted: 13`.
+
+The Slice 4 rollback assertion was mutation-tested: bypassing `withTransaction` in
+`replaceChunks` fails that test and only that test.
+
+**Database state after this block (2026-08-18):**
 
 ```
 chunks (live)              63 rows
   ./tmp/sampleproject      29
   is-plain-obj             20
   ./tmp/mini-demo          13
-  ./tmp/health-app          1   ← one-file demo, kind='file', no-declarations outcome
+  ./tmp/health-app          1
 
-chunks_backup_20260817     62 rows   ← taken BEFORE ./tmp/health-app was ingested
+chunks_backup_20260817     62 rows — still present, safe to drop by hand
 ```
 
-Restoring the backup therefore drops the `health-app` row. Recovery, if a destructive test goes
-wrong:
+`guard.sh` blocks `DROP TABLE` from an agent's Bash, so this one is owed to the human:
+`psql "$DATABASE_URL" -c "DROP TABLE chunks_backup_20260817;"`. It predates the `./tmp/health-app`
+ingest, so it was already a lossy restore point; every content hash in it is cached, making a
+re-ingest free.
 
-```
-psql "$DATABASE_URL" -c "TRUNCATE chunks; INSERT INTO chunks SELECT * FROM chunks_backup_20260817;"
-```
+**Still open, deliberately not folded in:** whole-file chunks over-report `end_line` by one
+whenever the source ends with a trailing newline, because `wholeFileChunks` reads
+`sourceFile.getEndLineNumber()` (`ts-morph.ts:501`). Declaration chunks are unaffected. Documented
+in `flow-map.md`, section F. It shares this block's theme — silent, small, lands on the citation
+guarantee — but it lives in the chunker, not the store.
 
-Re-ingesting `./tmp/sampleproject` afterwards costs nothing — all 29 of its content hashes are
-present in `.cache/embeddings/` (verified 29/29). Drop `chunks_backup_20260817` once this block
-lands.
-
-**A related defect found after this plan was written, deliberately not folded in:**
-whole-file chunks over-report `end_line` by one whenever the source ends with a trailing newline,
-because `wholeFileChunks` reads `sourceFile.getEndLineNumber()` (`ts-morph.ts:501`). Declaration
-chunks are unaffected. Documented in `flow-map.md`, section F. It shares this block's theme —
-silent, small, lands on the citation guarantee — but it lives in the chunker, not the store, and
-fixing it here would widen the diff past one idea.
+**Owed to the human:** `CLAUDE.md` and `README.md` are protected files. Both edits are drafted
+verbatim in the [Protected-file drafts](#protected-file-drafts) appendix at the end of this file,
+for hand-application.
 
 ## Context
 
@@ -363,3 +382,43 @@ block's whole subject is a `DELETE` keyed on `repo_source`. A fixture bug here d
 - Manual: delete a declaration from `./tmp/sampleproject`, re-ingest, confirm its row is gone.
 - Rollback if abandoned: `git checkout develop` and
   `TRUNCATE chunks; INSERT INTO chunks SELECT * FROM chunks_backup_20260817;`
+
+All of the above ran green on 2026-08-18, with `./tmp/mini-demo` standing in for
+`./tmp/sampleproject` as the manual corpus.
+
+## Protected-file drafts
+
+`CLAUDE.md` and `README.md` are protected; a `PreToolUse` hook blocks writes to both. These two
+edits are what this block owes them. Apply by hand.
+
+### 1. `CLAUDE.md` — add to Gotchas
+
+Place after the `Never docker compose down -v` line:
+
+```markdown
+- Ingest is **destructive**. `replaceChunks` deletes every row for a `repo_source` and re-inserts
+  the chunker's output inside one transaction, so after a successful run the table holds exactly
+  what the chunker just produced — current line numbers, current vectors, nothing orphaned. The
+  cost: a typo in `--repo` wipes that source's rows. The `DELETE` runs after embedding succeeds,
+  so a failed embed leaves the corpus intact.
+- `repo_source` is an **identity**, not a label. `./tmp/hono` and `/projects/.../tmp/hono` are two
+  corpora; ingesting one will not clear the other.
+- `Db.query` goes to `pool.query`, which takes an arbitrary connection per call — so
+  `db.query('BEGIN')` and the next statement land on different connections, and the `COMMIT` warns
+  `no transaction in progress` with no error raised. Anything transactional must go through
+  `db.withTransaction`, which holds one `pool.connect()` client for the whole callback.
+- `ON CONFLICT DO NOTHING` is still on the chunk INSERT, but only to collapse duplicate hashes
+  within a single run. It is no longer what makes re-ingest idempotent — the `DELETE` is.
+```
+
+### 2. `README.md` — the destructive-ingest warning
+
+The RISKS section of this plan requires this be named for users. Suggested wording, to place
+wherever ingest is described:
+
+```markdown
+> **Ingest replaces, it does not merge.** Indexing a repo deletes everything previously indexed
+> under that exact `repo_source` string and re-inserts the current chunks. This is what keeps
+> line numbers and embeddings honest, and it means a mistyped `--repo` clears that source. The
+> delete and the inserts share one transaction, so a failure part-way leaves the corpus as it was.
+```
