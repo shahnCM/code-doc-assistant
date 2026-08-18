@@ -29,11 +29,18 @@ function fakeEmbedClient(): { client: EmbedClient; calls: string[][] } {
   return { client, calls };
 }
 
-function fakeDb(): { db: Db; calls: Array<{ text: string; params: readonly unknown[] }> } {
+function fakeDb(options: { existingRows?: number } = {}): {
+  db: Db;
+  calls: Array<{ text: string; params: readonly unknown[] }>;
+} {
   const calls: Array<{ text: string; params: readonly unknown[] }> = [];
   const db: Db = {
     async query(text, params = []) {
       calls.push({ text, params });
+      if (/DELETE FROM chunks/i.test(text)) {
+        const existing = options.existingRows ?? 0;
+        return { rows: Array.from({ length: existing }, (_, i) => ({ id: i + 1 })) };
+      }
       return { rows: [{ id: calls.length }] };
     },
     withTransaction: async (fn) => fn(db),
@@ -105,7 +112,7 @@ describe('indexChunks', () => {
     expect(inserts[0] && lastParamOf(inserts[0])).toEqual(inserts[1] && lastParamOf(inserts[1]));
   });
 
-  it('[REQ] the returned IndexReport reconciles totalChunks, uniqueHashes, cacheHits, embedded, and upserted', async () => {
+  it('[REQ] the returned IndexReport reconciles totalChunks, uniqueHashes, cacheHits, embedded, deleted, and inserted', async () => {
     const cachedChunk = testChunk({ contentHash: 'cached-hash', symbolName: 'cached' });
     const freshChunk1 = testChunk({ contentHash: 'fresh-hash', symbolName: 'fresh1' });
     const freshChunk2 = testChunk({ contentHash: 'fresh-hash', symbolName: 'fresh2' });
@@ -127,7 +134,25 @@ describe('indexChunks', () => {
     expect(result.value.uniqueHashes).toBe(2);
     expect(result.value.cacheHits).toBe(1);
     expect(result.value.embedded).toBe(1);
-    expect(result.value.upserted).toBe(3);
+    expect(result.value.inserted).toBe(3);
+  });
+
+  it('[REQ] the report separates rows cleared from rows written, so "nothing changed" cannot read as "everything was rejected"', async () => {
+    const chunk = testChunk({ contentHash: 'hash-1' });
+    const cache = fakeCache();
+    const { client } = fakeEmbedClient();
+    const { db } = fakeDb({ existingRows: 7 });
+
+    const result = await indexChunks([chunk], 'https://github.com/o/r', 'postgres://unused', 'gemini-embedding-2', {
+      embedClient: client,
+      cache,
+      db,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.deleted).toBe(7);
+    expect(result.value.inserted).toBe(1);
   });
 
   it('[25][REQ] a cancelled embedding batch writes no partial entries to the content-hash cache', async () => {

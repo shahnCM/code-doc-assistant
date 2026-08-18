@@ -104,7 +104,8 @@ describe('cli main()', () => {
     expect(JSON.parse(written[0]?.data ?? '[]')).not.toHaveLength(0);
     expect(callCount.value).toBeGreaterThan(0);
     expect(dbCalls.length).toBeGreaterThan(0);
-    expect(logs.some((line) => line.includes('Upserted'))).toBe(true);
+    expect(logs.some((line) => line.includes('Deleted'))).toBe(true);
+    expect(logs.some((line) => line.includes('Inserted'))).toBe(true);
   });
 
   it('exits 1 with a usage message when --repo is missing', async () => {

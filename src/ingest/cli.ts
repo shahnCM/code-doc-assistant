@@ -88,7 +88,8 @@ export async function main(options: CliOptions = {}): Promise<number> {
   log(`Unique hashes:   ${indexResult.value.uniqueHashes}`);
   log(`Cache hits:      ${indexResult.value.cacheHits}`);
   log(`Embedded:        ${indexResult.value.embedded}`);
-  log(`Upserted:        ${indexResult.value.upserted}`);
+  log(`Deleted:         ${indexResult.value.deleted}`);
+  log(`Inserted:        ${indexResult.value.inserted}`);
 
   return 0;
 }

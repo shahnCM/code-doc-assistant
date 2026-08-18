@@ -12,7 +12,8 @@ export interface IndexReport {
   uniqueHashes: number;
   cacheHits: number;
   embedded: number;
-  upserted: number;
+  deleted: number;
+  inserted: number;
 }
 
 export interface IndexOptions {
@@ -114,7 +115,8 @@ export async function indexChunks(
         uniqueHashes: byHash.size,
         cacheHits,
         embedded: missTexts.length,
-        upserted: storeResult.value.inserted,
+        deleted: storeResult.value.deleted,
+        inserted: storeResult.value.inserted,
       },
     };
   } finally {
