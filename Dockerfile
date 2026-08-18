@@ -12,8 +12,10 @@ FROM node:24.18.0-slim AS runtime
 WORKDIR /app
 
 # git is a runtime dependency, not a build one — ingest acquires repos via `git clone --depth 1`.
+# ca-certificates is installed alongside it so cloning an https:// GitHub URL has a CA bundle to
+# verify the server cert against.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git \
+    && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
@@ -21,6 +23,17 @@ RUN npm ci --omit=dev
 
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node migrations ./migrations
+# migrations/*.ts import from ../src (001_init.ts reads EMBEDDING_DIM out of
+# src/index/constants.ts) rather than the compiled dist/ output, since node-pg-migrate runs the
+# raw .ts migration files through jiti — so src must be present at runtime too, not just during
+# the build stage. Without this the `migrate` service fails on an unresolved import.
+COPY --chown=node:node src ./src
+
+# ingest writes into ./tmp (git clone target), ./chunks.json (chunk dump) and ./.cache/embeddings
+# at runtime as the non-root `node` user this container runs as, but /app itself and files copied
+# without --chown (package.json, node_modules) are root-owned — chown the whole tree once rather
+# than individually as new write targets are discovered.
+RUN chown -R node:node /app
 
 USER node
 

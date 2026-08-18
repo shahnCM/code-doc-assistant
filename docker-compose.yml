@@ -1,11 +1,17 @@
 # Quick start:
 #   cp .env.example .env   # fill in GEMINI_API_KEY
+#   touch chunks.json      # see the app volumes below — this one must exist first
 #   docker compose up
 #
 # Ingest is a one-off, not a compose service — run after `docker compose up`:
 #   docker compose exec app node dist/ingest/cli.js --repo <path-or-url>
 # (not `npm run ingest`: that script's `node --env-file=.env` expects a literal .env file in the
 # container, which doesn't exist there — env comes from this file's env_file: entries instead.)
+#
+# Ingest REPLACES rather than merges: it deletes every row already indexed under that exact
+# --repo string and re-inserts the current chunks, delete and inserts sharing one transaction.
+# That is what keeps line numbers and embeddings honest across re-runs, and it means a mistyped
+# --repo clears that corpus. A failure part-way leaves the previous state intact.
 
 services:
   postgres:
@@ -37,6 +43,19 @@ services:
     env_file: .env
     ports:
       - "${PORT:-8080}:${PORT:-8080}"
+    volumes:
+      # Bind-mounted so ingest's git clones land on the host for reference, instead of staying
+      # trapped inside the container's own filesystem layer.
+      - ./tmp:/app/tmp
+      # The embedding cache, keyed by content hash. Persisting it is what makes a re-ingest free:
+      # without it every run re-embeds the whole corpus and spends free-tier request budget. This
+      # matters more than it used to — a re-ingest is now how you refresh line numbers and
+      # vectors, so it is a normal operation rather than a no-op.
+      - ./.cache:/app/.cache
+      # A file mount, not a directory one: if ./chunks.json does not already exist on the host,
+      # Docker creates a *directory* at this path and ingest fails with EISDIR. chunks.json is
+      # gitignored, so a fresh clone will not have it — hence the `touch` in the quick start.
+      - ./chunks.json:/app/chunks.json
     depends_on:
       postgres:
         condition: service_healthy
