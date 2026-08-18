@@ -83,7 +83,7 @@ describe('indexChunks', () => {
     expect(result.value.embedded).toBe(0);
   });
 
-  it('[REQ] dedups two chunks sharing one contentHash — embed client called once, both upserts carry the identical embedding', async () => {
+  it('[REQ] dedups two chunks sharing one contentHash — embed client called once, both inserts carry the identical embedding', async () => {
     const a = testChunk({ symbolName: 'add', contentHash: 'shared-hash' });
     const b = testChunk({ symbolName: 'addAlias', contentHash: 'shared-hash' });
     const cache = fakeCache();
@@ -98,9 +98,11 @@ describe('indexChunks', () => {
 
     expect(result.ok).toBe(true);
     expect(calls).toHaveLength(1);
-    expect(dbCalls).toHaveLength(2);
+    expect(dbCalls[0]?.text).toMatch(/DELETE FROM chunks/i);
+    const inserts = dbCalls.filter((c) => /INSERT INTO chunks/i.test(c.text));
+    expect(inserts).toHaveLength(2);
     const lastParamOf = (call: { params: readonly unknown[] }): unknown => call.params[call.params.length - 1];
-    expect(dbCalls[0] && lastParamOf(dbCalls[0])).toEqual(dbCalls[1] && lastParamOf(dbCalls[1]));
+    expect(inserts[0] && lastParamOf(inserts[0])).toEqual(inserts[1] && lastParamOf(inserts[1]));
   });
 
   it('[REQ] the returned IndexReport reconciles totalChunks, uniqueHashes, cacheHits, embedded, and upserted', async () => {
