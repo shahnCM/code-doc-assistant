@@ -36,6 +36,7 @@ function fakeDb(): { db: Db; calls: Array<{ text: string; params: readonly unkno
       table.set(key, { id, ...row });
       return { rows: [{ id }] };
     },
+    withTransaction: async (fn) => fn(db),
   };
 
   return { db, calls, table };

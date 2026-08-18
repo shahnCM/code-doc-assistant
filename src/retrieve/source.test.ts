@@ -12,6 +12,7 @@ function fakeDb(rows: Array<Record<string, unknown>> = []): {
       calls.push({ text, params });
       return { rows };
     },
+    withTransaction: async (fn) => fn(db),
   };
   return { db, calls };
 }

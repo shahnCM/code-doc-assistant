@@ -10,28 +10,34 @@ import type { Result } from '../shared/types.js';
 import { createApp, type AppDeps } from './app.js';
 
 function fakeDb(rows: Array<Record<string, unknown>> = [], onQuery?: () => void): Db {
-  return {
+  const db: Db = {
     async query() {
       onQuery?.();
       return { rows };
     },
+    withTransaction: async (fn) => fn(db),
   };
+  return db;
 }
 
 function rejectingDb(): Db {
-  return {
+  const db: Db = {
     async query() {
       throw new Error('connection refused');
     },
+    withTransaction: async (fn) => fn(db),
   };
+  return db;
 }
 
 function throwingDb(): Db {
-  return {
+  const db: Db = {
     async query() {
       throw new Error('should never be called by /health');
     },
+    withTransaction: async (fn) => fn(db),
   };
+  return db;
 }
 
 function fakeEmbedClient(): { client: EmbedClient; calls: { count: number } } {

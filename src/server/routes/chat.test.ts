@@ -55,6 +55,7 @@ function fakeDb(rows: Array<Record<string, unknown>> = []): { db: Db; calls: { c
       calls.count += 1;
       return { rows };
     },
+    withTransaction: async (fn) => fn(db),
   };
   return { db, calls };
 }

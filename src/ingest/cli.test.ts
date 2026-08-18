@@ -49,6 +49,7 @@ function fakeDb(): { db: Db; calls: Array<{ text: string; params: readonly unkno
       calls.push({ text, params });
       return { rows: [{ id: calls.length }] };
     },
+    withTransaction: async (fn) => fn(db),
   };
   return { db, calls };
 }
