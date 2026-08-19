@@ -42,19 +42,30 @@ function paramsFor(repoSource: string, row: EmbeddedChunk): unknown[] {
   ];
 }
 
-export async function upsertChunks(
+const DELETE_SQL = `
+  DELETE FROM chunks WHERE repo_source = $1
+  RETURNING id
+`;
+
+/**
+ * Replace semantics: after this returns ok, the rows for `repoSource` are exactly `rows`.
+ * ON CONFLICT DO NOTHING stays on the INSERT, but only to collapse duplicate hashes inside a
+ * single run — the DELETE has already removed anything a previous run left behind.
+ */
+export async function replaceChunks(
   db: Db,
   repoSource: string,
   rows: readonly EmbeddedChunk[],
-): Promise<Result<{ upserted: number }, string>> {
-  try {
-    let upserted = 0;
-    for (const row of rows) {
-      const result = await db.query(INSERT_SQL, paramsFor(repoSource, row));
-      if (result.rows.length > 0) upserted += 1;
-    }
-    return { ok: true, value: { upserted } };
-  } catch (error) {
-    return { ok: false, error: error instanceof Error ? error.message : String(error) };
-  }
+): Promise<Result<{ deleted: number; inserted: number }, string>> {
+  return db.withTransaction(
+    async (tx): Promise<Result<{ deleted: number; inserted: number }, string>> => {
+      const removed = await tx.query(DELETE_SQL, [repoSource]);
+      let inserted = 0;
+      for (const row of rows) {
+        const result = await tx.query(INSERT_SQL, paramsFor(repoSource, row));
+        if (result.rows.length > 0) inserted += 1;
+      }
+      return { ok: true, value: { deleted: removed.rows.length, inserted } };
+    },
+  );
 }

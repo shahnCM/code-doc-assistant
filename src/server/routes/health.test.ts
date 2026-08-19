@@ -26,7 +26,8 @@ function fakeResponse() {
 }
 
 function fakeDb(query: Db['query']): Db {
-  return { query };
+  const db: Db = { query, withTransaction: async (fn) => fn(db) };
+  return db;
 }
 
 describe('createReadyHandler', () => {

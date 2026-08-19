@@ -4,3 +4,10 @@ tmp/
 dist/
 .cache/
 chunks.json
+.vscode/
+
+# Personal interview-prep notes — candid self-assessment, not project documentation.
+interview-prep.md
+role-strategy.md
+codebase-mastery.md
+LITERATURE-REVIEW.md

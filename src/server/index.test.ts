@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import type { PgDb } from '../index/db.js';
+import type { Db, PgDb } from '../index/db.js';
 import { startServer } from './index.js';
 
 const validEnv = {
@@ -13,12 +13,20 @@ const validEnv = {
 
 function fakeDbFactory(): { dbFactory: (connectionString: string) => PgDb; endCalls: { count: number } } {
   const endCalls = { count: 0 };
-  const dbFactory = (): PgDb => ({
-    db: { async query() { return { rows: [] }; } },
-    end: async () => {
-      endCalls.count += 1;
-    },
-  });
+  const dbFactory = (): PgDb => {
+    const db: Db = {
+      async query() {
+        return { rows: [] };
+      },
+      withTransaction: async (fn) => fn(db),
+    };
+    return {
+      db,
+      end: async () => {
+        endCalls.count += 1;
+      },
+    };
+  };
   return { dbFactory, endCalls };
 }
 

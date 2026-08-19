@@ -5,3 +5,8 @@ tmp
 .git
 .env
 *.log
+
+# Bind-mounted at runtime by docker-compose.yml, so shipping them in the build context only
+# makes the image bigger and risks baking a stale copy under the mount point.
+.cache
+chunks.json

@@ -3,7 +3,7 @@ import { type EmbedBatchOptions, embedTexts } from './batch.js';
 import { type EmbedCache, createFileEmbedCache } from './cache.js';
 import { type Db, type PgDb, createPgDb } from './db.js';
 import { type EmbedClient, realEmbedClient } from './embedClient.js';
-import { type EmbeddedChunk, upsertChunks } from './store.js';
+import { type EmbeddedChunk, replaceChunks } from './store.js';
 
 const DEFAULT_CACHE_DIR = '.cache/embeddings';
 
@@ -12,7 +12,8 @@ export interface IndexReport {
   uniqueHashes: number;
   cacheHits: number;
   embedded: number;
-  upserted: number;
+  deleted: number;
+  inserted: number;
 }
 
 export interface IndexOptions {
@@ -102,9 +103,9 @@ export async function indexChunks(
       }
     }
 
-    const upsertResult = await upsertChunks(db, repoSource, rows);
-    if (!upsertResult.ok) {
-      return { ok: false, error: `store failed: ${upsertResult.error}` };
+    const storeResult = await replaceChunks(db, repoSource, rows);
+    if (!storeResult.ok) {
+      return { ok: false, error: `store failed: ${storeResult.error}` };
     }
 
     return {
@@ -114,7 +115,8 @@ export async function indexChunks(
         uniqueHashes: byHash.size,
         cacheHits,
         embedded: missTexts.length,
-        upserted: upsertResult.value.upserted,
+        deleted: storeResult.value.deleted,
+        inserted: storeResult.value.inserted,
       },
     };
   } finally {

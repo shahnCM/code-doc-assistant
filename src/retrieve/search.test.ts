@@ -24,6 +24,7 @@ function fakeDb(rows: Array<Record<string, unknown>> = []): {
       calls.push({ text, params });
       return { rows };
     },
+    withTransaction: async (fn) => fn(db),
   };
   return { db, calls };
 }
@@ -198,6 +199,7 @@ describe('searchChunks', () => {
       async query() {
         throw new Error('connection refused');
       },
+      withTransaction: async (fn) => fn(rejectingDb),
     };
     const dbFactory = (): PgDb => ({
       db: rejectingDb,

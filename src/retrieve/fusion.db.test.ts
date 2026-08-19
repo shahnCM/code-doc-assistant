@@ -3,7 +3,7 @@ import { loadEnv } from '../config.js';
 import { EMBEDDING_DIM } from '../index/constants.js';
 import { createPgDb, type Db, type PgDb } from '../index/db.js';
 import type { EmbedClient } from '../index/embedClient.js';
-import { upsertChunks, type EmbeddedChunk } from '../index/store.js';
+import { replaceChunks, type EmbeddedChunk } from '../index/store.js';
 import type { Chunk } from '../shared/types.js';
 import { searchChunks } from './search.js';
 
@@ -144,10 +144,10 @@ beforeAll(async () => {
     { chunk: rowF, embedding: vectorAt([[2, 1]]) },
     { chunk: rowA, embedding: vectorAt([[0, -1]]) },
   ];
-  const result = await upsertChunks(db, REPO_SOURCE, rows);
+  const result = await replaceChunks(db, REPO_SOURCE, rows);
   if (!result.ok) throw new Error(result.error);
-  if (result.value.upserted !== 6) {
-    throw new Error(`expected 6 fixture rows upserted, got ${result.value.upserted}`);
+  if (result.value.inserted !== 6) {
+    throw new Error(`expected 6 fixture rows inserted, got ${result.value.inserted}`);
   }
 });
 

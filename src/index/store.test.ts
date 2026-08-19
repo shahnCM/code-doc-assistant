@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { Chunk } from '../shared/types.js';
 import type { Db } from './db.js';
-import { upsertChunks } from './store.js';
+import { replaceChunks } from './store.js';
 
-function fakeDb(): { db: Db; calls: Array<{ text: string; params: readonly unknown[] }>; table: Map<string, Record<string, unknown>> } {
+// The fake restores its table when the callback fails, because replaceChunks now depends on
+// rollback for correctness — without it, a mid-insert failure would leave the DELETE applied and
+// the tests below could not tell the two outcomes apart. It models the contract only; that real
+// Postgres honours it is asserted in the db contract test, not here.
+function fakeDb(options: { failOnHash?: string } = {}): {
+  db: Db;
+  calls: Array<{ text: string; params: readonly unknown[] }>;
+  table: Map<string, Record<string, unknown>>;
+} {
   const calls: Array<{ text: string; params: readonly unknown[] }> = [];
   const table = new Map<string, Record<string, unknown>>();
   let nextId = 1;
@@ -11,6 +19,18 @@ function fakeDb(): { db: Db; calls: Array<{ text: string; params: readonly unkno
   const db: Db = {
     async query(text: string, params: readonly unknown[] = []) {
       calls.push({ text, params });
+
+      if (/DELETE FROM chunks/i.test(text)) {
+        const repoSource = params[0];
+        const removed: Array<Record<string, unknown>> = [];
+        for (const [key, row] of table) {
+          if (row['repo_source'] === repoSource) {
+            removed.push({ id: row['id'] });
+            table.delete(key);
+          }
+        }
+        return { rows: removed };
+      }
 
       const columnsMatch = /INSERT INTO chunks \(([^)]+)\)/i.exec(text);
       if (!columnsMatch) return { rows: [] };
@@ -21,6 +41,10 @@ function fakeDb(): { db: Db; calls: Array<{ text: string; params: readonly unkno
       columns.forEach((col, i) => {
         row[col] = params[i];
       });
+
+      if (options.failOnHash !== undefined && row['content_hash'] === options.failOnHash) {
+        throw new Error(`insert failed for ${options.failOnHash}`);
+      }
 
       const conflictMatch = /ON CONFLICT \(([^)]+)\)/i.exec(text);
       const conflictColumnList = conflictMatch?.[1];
@@ -35,6 +59,22 @@ function fakeDb(): { db: Db; calls: Array<{ text: string; params: readonly unkno
       nextId += 1;
       table.set(key, { id, ...row });
       return { rows: [{ id }] };
+    },
+
+    withTransaction: async (fn) => {
+      const snapshot = new Map(table);
+      const restore = () => {
+        table.clear();
+        for (const [key, row] of snapshot) table.set(key, row);
+      };
+      try {
+        const result = await fn(db);
+        if (!result.ok) restore();
+        return result;
+      } catch (error) {
+        restore();
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+      }
     },
   };
 
@@ -63,54 +103,118 @@ function testChunk(overrides: Partial<Chunk> = {}): Chunk {
   };
 }
 
-describe('upsertChunks', () => {
+describe('replaceChunks', () => {
   it('[REQ] inserts a new row for a fresh (repo_source, content_hash) pair with every mapped column present', async () => {
     const { db, calls } = fakeDb();
     const chunk = testChunk();
 
-    const result = await upsertChunks(db, 'https://github.com/o/r', [{ chunk, embedding: [0.1, 0.2, 0.3] }]);
+    const result = await replaceChunks(db, 'https://github.com/o/r', [
+      { chunk, embedding: [0.1, 0.2, 0.3] },
+    ]);
 
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.upserted).toBe(1);
-    expect(calls).toHaveLength(1);
-    const [call] = calls;
-    expect(call?.params).toContain('https://github.com/o/r');
-    expect(call?.params).toContain(chunk.filePath);
-    expect(call?.params).toContain(chunk.contentHash);
-    expect(call?.params).toContain(chunk.content);
-    expect(call?.params).toContain(chunk.embedText);
+    expect(result.value).toEqual({ deleted: 0, inserted: 1 });
+
+    const insert = calls.find((c) => /INSERT INTO chunks/i.test(c.text));
+    expect(insert?.params).toContain('https://github.com/o/r');
+    expect(insert?.params).toContain(chunk.filePath);
+    expect(insert?.params).toContain(chunk.contentHash);
+    expect(insert?.params).toContain(chunk.content);
+    expect(insert?.params).toContain(chunk.embedText);
   });
 
-  it('[REQ] a repeat (repo_source, content_hash) is a no-op — the existing row keeps its original start_line/end_line', async () => {
+  it('[REQ] a re-ingest with shifted line numbers stores the new start_line/end_line', async () => {
     const { db, table } = fakeDb();
     const repoSource = 'https://github.com/o/r';
     const original = testChunk({ startLine: 10, endLine: 12 });
 
-    const first = await upsertChunks(db, repoSource, [{ chunk: original, embedding: [0.1] }]);
-    expect(first.ok).toBe(true);
-    if (!first.ok) return;
-    expect(first.value.upserted).toBe(1);
+    const first = await replaceChunks(db, repoSource, [{ chunk: original, embedding: [0.1] }]);
+    expect(first.ok && first.value).toEqual({ deleted: 0, inserted: 1 });
 
     const shifted = testChunk({ startLine: 55, endLine: 57 });
-    const second = await upsertChunks(db, repoSource, [{ chunk: shifted, embedding: [0.1] }]);
-    expect(second.ok).toBe(true);
-    if (!second.ok) return;
-    expect(second.value.upserted).toBe(0);
+    const second = await replaceChunks(db, repoSource, [{ chunk: shifted, embedding: [0.1] }]);
+    expect(second.ok && second.value).toEqual({ deleted: 1, inserted: 1 });
 
     const stored = table.get(`${repoSource}::${original.contentHash}`);
-    expect(stored?.start_line).toBe(10);
-    expect(stored?.end_line).toBe(12);
+    expect(stored?.start_line).toBe(55);
+    expect(stored?.end_line).toBe(57);
   });
 
-  it('a different repo_source with the same content_hash does not collide', async () => {
-    const { db } = fakeDb();
+  it('[REQ] a re-ingest with a new embedding replaces the stored vector', async () => {
+    const { db, table } = fakeDb();
+    const repoSource = 'https://github.com/o/r';
     const chunk = testChunk();
 
-    const a = await upsertChunks(db, 'https://github.com/o/r1', [{ chunk, embedding: [0.1] }]);
-    const b = await upsertChunks(db, 'https://github.com/o/r2', [{ chunk, embedding: [0.1] }]);
+    await replaceChunks(db, repoSource, [{ chunk, embedding: [0.1] }]);
+    expect(table.get(`${repoSource}::${chunk.contentHash}`)?.embedding).toBe('[0.1]');
 
-    expect(a.ok && a.value.upserted).toBe(1);
-    expect(b.ok && b.value.upserted).toBe(1);
+    await replaceChunks(db, repoSource, [{ chunk, embedding: [0.9] }]);
+    expect(table.get(`${repoSource}::${chunk.contentHash}`)?.embedding).toBe('[0.9]');
+  });
+
+  it('[REQ] a chunk absent from the new set is gone after the run', async () => {
+    const { db, table } = fakeDb();
+    const repoSource = 'https://github.com/o/r';
+    const kept = testChunk({ contentHash: 'hash-kept', symbolName: 'kept' });
+    const removed = testChunk({ contentHash: 'hash-removed', symbolName: 'removed' });
+
+    await replaceChunks(db, repoSource, [
+      { chunk: kept, embedding: [0.1] },
+      { chunk: removed, embedding: [0.2] },
+    ]);
+    expect(table.size).toBe(2);
+
+    const second = await replaceChunks(db, repoSource, [{ chunk: kept, embedding: [0.1] }]);
+
+    expect(second.ok && second.value).toEqual({ deleted: 2, inserted: 1 });
+    expect(table.size).toBe(1);
+    expect(table.has(`${repoSource}::hash-removed`)).toBe(false);
+    expect(table.has(`${repoSource}::hash-kept`)).toBe(true);
+  });
+
+  it('[REQ] the delete is scoped to one repo_source — another source keeps its rows', async () => {
+    const { db, table } = fakeDb();
+    const chunk = testChunk();
+
+    await replaceChunks(db, 'https://github.com/o/r1', [{ chunk, embedding: [0.1] }]);
+    const second = await replaceChunks(db, 'https://github.com/o/r2', [{ chunk, embedding: [0.1] }]);
+
+    expect(second.ok && second.value).toEqual({ deleted: 0, inserted: 1 });
+    expect(table.size).toBe(2);
+    expect(table.has(`https://github.com/o/r1::${chunk.contentHash}`)).toBe(true);
+  });
+
+  it('two chunks sharing a content_hash within one run still collapse to one row', async () => {
+    const { db, table } = fakeDb();
+    const a = testChunk({ symbolName: 'a' });
+    const b = testChunk({ symbolName: 'b' });
+
+    const result = await replaceChunks(db, 'https://github.com/o/r', [
+      { chunk: a, embedding: [0.1] },
+      { chunk: b, embedding: [0.1] },
+    ]);
+
+    expect(result.ok && result.value).toEqual({ deleted: 0, inserted: 1 });
+    expect(table.size).toBe(1);
+  });
+
+  it('[REQ] a failure mid-insert rolls back — nothing deleted, nothing inserted', async () => {
+    const { db, table } = fakeDb({ failOnHash: 'hash-new' });
+    const repoSource = 'https://github.com/o/r';
+    const existing = testChunk({ contentHash: 'hash-existing' });
+
+    await replaceChunks(db, repoSource, [{ chunk: existing, embedding: [0.1] }]);
+    const before = new Map(table);
+
+    const failed = await replaceChunks(db, repoSource, [
+      { chunk: testChunk({ contentHash: 'hash-ok' }), embedding: [0.2] },
+      { chunk: testChunk({ contentHash: 'hash-new' }), embedding: [0.3] },
+    ]);
+
+    expect(failed.ok).toBe(false);
+    if (failed.ok) return;
+    expect(failed.error).toContain('insert failed for hash-new');
+    expect([...table.entries()]).toEqual([...before.entries()]);
   });
 });
